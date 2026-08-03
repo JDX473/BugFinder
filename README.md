@@ -31,6 +31,7 @@
 | `app/tools/trace_reconstruction.py` | traceId 聚合重建调用链（PRD §5.3 关键路径，强/弱重建 + 慢错定位） |
 | `app/pipeline/anomaly_detection.py` | MAD/3σ 指标异常检测（确定性，形态/起始时间/幅度，PRD §5.2） |
 | `app/pipeline/event_normalizer.py` | 事件接收/归一化 + 去重（脏告警→IncidentEvent，RCA-003/004） |
+| `app/pipeline/log_clustering.py` | 日志聚类/降噪（噪音过滤 + 模板聚类 + 簇摘要，PRD §5.1/§6.2 步骤 4） |
 | `scripts/run_trace_rebuild.py` | CLI 原型：traceId → 粗糙调用序列 |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
