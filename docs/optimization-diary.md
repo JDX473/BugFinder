@@ -134,3 +134,37 @@
   验证到 LLM 的真实价值在业务语义兜底（`充电桩充不进电` → business_logic，纯规则会落 other）。
 - **避坑**：**别用"命中率提升"衡量 LLM 价值**，用"规则覆盖不到的场景数"。纯指标故障的
   命中率是确定性算法的成绩，不是 LLM 的。
+
+---
+
+## 数据适配类（RE2 真实数据）
+
+### #21 数据集文件命名不同（RE1 `data.csv` vs RE2 `metrics.csv`）
+- **坑**：RE2-SS 用 `metrics.csv`（含 `simple_metrics.csv`），RE1 用 `data.csv`。适配器硬编码
+  `data.csv` 导致 RE2 全部 case 加载失败。
+- **解决**：`load_case_csv` 按存在性探测 `data.csv` / `metrics.csv` / `simple_metrics.csv`。
+- **避坑**：数据集格式差异按"探测文件名"适配，别假设固定命名。
+
+### #22 真实指标 CSV 有空值（脏数据）
+- **坑**：RE2 `metrics.csv` 443 列里有的列有空值（`''`），`float()` 转换抛 ValueError，
+  整个 case 检测失败。
+- **解决**：`metric_series`/`anomaly_series` 跳过空值/脏数据点。
+- **避坑**：真实数据一定有缺失值，解析时跳脏点而非整体放弃。
+
+### #23 RE2 日志全是 info 级，`min_level=warn` 过滤成 0 条
+- **坑**：RE2-SS 的 44353 条日志全部是 `info` 级（Go 服务结构日志、access log 不分级），
+  `cluster_logs` 默认 `min_level=warn` 把全部日志过滤成 0 个簇。mock 假设"异常日志至少
+  warn 级"在真实数据上失效——真实日志的异常靠**内容**（Slow query / 5xx / error）而非 level。
+- **解决**：RE2 场景把 `min_level` 降到 `info`，靠噪音黑名单 + 内容识别异常。
+- **避坑**：**日志级别分级是 mock 数据的约定，不是真实数据的**。真实系统日志常全 info，
+  异常判定必须回到内容信号。
+
+### #24 真实指标名带 k8s 前缀（RE2），`_svc_from_metric` 可能解析错
+- **坑**：RE2 指标名如 `catalogue_container-cpu-usage-seconds-total`、`gke-...-node-network-...`，
+  `_svc_from_metric` 取第一个 `_` 前的段——`gke-...` 会被解析成 `gke-gke-cluster...`（错），
+  但 `catalogue_container-...` 恰好解析成 `catalogue`（对）。
+- **解决**：幅度优先定位（上一轮修复）让根因服务的强信号（cpu 614x）压过 node 级弱干扰，
+  即使个别服务名解析错，rank1 仍正确（RE2 90 cases Top-3 91.1% 验证）。
+- **避坑**：**k8s 指标名的服务提取不能靠简单 split**——真实 Prometheus 指标名带
+  container/istio/node/pod 层级，需要按 `{service}_{kind}-{metric}` 的语义解析
+  （Phase 2 改进项，当前靠幅度优先兜底）。
