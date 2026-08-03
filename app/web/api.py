@@ -13,16 +13,19 @@ FastAPI 提供三个端点，复用 RCAWorkflow + mock 数据源：
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.graph.workflow import RCAWorkflow
 from app.pipeline.event_normalizer import normalize_alert_payload
+from app.schema.models import IncidentEvent, IncidentSource, ManualInput
 
 app = FastAPI(title="RCA Agent 报告服务", version="0.1.0")
 
@@ -35,8 +38,15 @@ if _STATIC_DIR.exists():
 # 内存报告存储（骨架阶段；接真实环境换 Postgres）
 _reports: dict[str, Any] = {}
 
-# 工作流实例（骨架阶段固定 mock + 纯规则）
-_workflow = RCAWorkflow()
+# 工作流实例：默认注入真实 DeepSeek（场景兜底/假设排序/ReAct 都用上）。
+# 未配置 API key 时降级纯规则（create_deepseek_client 返回 None）。
+def _build_workflow() -> RCAWorkflow:
+    from app.llm.deepseek_llm import create_deepseek_client
+
+    llm = create_deepseek_client()
+    return RCAWorkflow(llm=llm)
+
+_workflow = _build_workflow()
 
 # mock 数据源预设的故障样例（演示用，PRD §5.1 事件输入）
 _MOCK_ALERTS: list[dict] = [
@@ -102,6 +112,46 @@ def investigate_manual(body: ManualInvestigate) -> dict:
         "status": report.meta.status.value,
         "n_candidates": len(report.root_cause_candidates),
     }
+
+
+@app.get("/api/investigate/stream")
+async def investigate_stream(
+    free_text: str,
+    service: str | None = None,
+    trace_id: str | None = None,
+) -> Any:
+    """流式调查（SSE）：实时推送每步进度，最后推送完整报告。
+
+    前端用 fetch-stream 消费：每行 `data: {json}\n\n`。
+    事件类型：step（进度）/ report（最终报告）/ error / interrupt。
+    """
+    if not free_text.strip():
+        raise HTTPException(status_code=422, detail="free_text 不能为空")
+
+    def gen():
+        try:
+            for event in _workflow.stream(
+                _incident_from_manual(free_text, service, trace_id)
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _incident_from_manual(free_text: str, service: str | None, trace_id: str | None) -> IncidentEvent:
+    """构造手动触发的事件（RCA-002）。"""
+    return IncidentEvent(
+        incident_id=f"INC-manual-{int(datetime.now(timezone.utc).timestamp())}",
+        source=IncidentSource.MANUAL,
+        triggered_at=datetime.now(timezone.utc),
+        manual_input=ManualInput(trace_id=trace_id, service=service, free_text=free_text),
+    )
 
 
 @app.get("/api/incidents")

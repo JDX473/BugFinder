@@ -25,7 +25,6 @@
   .badge.status { background:#0e2c3d; color:var(--accent); }
   button { background:var(--accent); color:#fff; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; }
   button:disabled { opacity:0.5; cursor:not-allowed; }
-  button.secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
   .candidate { padding:10px 0; border-bottom:1px solid var(--border); }
   .candidate:last-child { border-bottom:none; }
   .candidate .rank { color:var(--accent); font-weight:700; }
@@ -41,6 +40,8 @@
   @media (max-width:900px){ .grid{ grid-template-columns:1fr; } }
   .hidden { display:none; }
   #loading { text-align:center; color:var(--muted); padding:20px; }
+  .step-chip { background:var(--bg); border:1px solid var(--border); border-radius:14px; padding:4px 10px; font-size:12px; color:var(--muted); }
+  .step-chip.done { border-color:var(--good); color:var(--good); }
 </style>
 </head>
 <body>
@@ -56,7 +57,13 @@
              style="width:150px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:13px;">
       <button onclick="sendMessage()">发送 →</button>
     </div>
-    <div class="muted" style="font-size:12px;margin-top:6px;">用一句话描述故障，可选填服务名辅助定位。走手动触发调查（RCA-002）。</div>
+    <div class="muted" style="font-size:12px;margin-top:6px;">用一句话描述故障，可选填服务名辅助定位。走手动触发调查（RCA-002），实时流式返回进度。</div>
+  </div>
+
+  <div id="progress" class="card hidden">
+    <h2>调查进度</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;" id="progress-steps"></div>
+    <div id="status-text" class="muted" style="margin-top:8px;font-size:13px;"></div>
   </div>
 
   <div class="card">
@@ -87,6 +94,7 @@
 
 <script>
 const API = '';
+const _reportsCache = {};
 
 async function loadIncidents() {
   const el = document.getElementById('incidents');
@@ -105,27 +113,6 @@ async function loadIncidents() {
   } catch(e) { el.innerHTML = `<div class="muted">加载失败: ${e}</div>`; }
 }
 
-async function sendMessage() {
-  const input = document.getElementById('msg-input');
-  const svc = document.getElementById('msg-service');
-  const text = input.value.trim();
-  if (!text) { alert('请先描述故障'); return; }
-  const btn = document.querySelector('.card button');
-  if (btn) btn.disabled = true;
-  try {
-    const r = await fetch(`${API}/api/investigate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ free_text: text, service: svc.value.trim() || null }),
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.detail || '调查失败'); return; }
-    input.value = '';
-    await loadReport(d.report_id);
-  } catch(e) { alert('调查失败: ' + e); }
-  finally { if (btn) btn.disabled = false; }
-}
-
 async function investigate(id) {
   const btns = document.querySelectorAll('button');
   btns.forEach(b => b.disabled = true);
@@ -138,11 +125,69 @@ async function investigate(id) {
   finally { btns.forEach(b => b.disabled = false); }
 }
 
-async function loadReport(reportId) {
-  const r = await fetch(`${API}/api/reports/${reportId}`);
-  const d = await r.json();
+async function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const svc = document.getElementById('msg-service');
+  const text = input.value.trim();
+  if (!text) { alert('请先描述故障'); return; }
+  const btn = document.querySelector('.card button');
+  if (btn) btn.disabled = true;
+
+  // 显示进度条
+  const prog = document.getElementById('progress');
+  prog.classList.remove('hidden');
+  const stepsEl = document.getElementById('progress-steps');
+  stepsEl.innerHTML = '';
+  const steps = ['事件解析','场景判定','链路重建','日志分析','指标验证','假设打分','报告生成'];
+  steps.forEach((s, i) => {
+    const el = document.createElement('span');
+    el.className = 'step-chip';
+    el.id = 'step-' + i;
+    el.textContent = `${i+1}.${s}`;
+    stepsEl.appendChild(el);
+  });
+  const statusEl = document.getElementById('status-text');
+  statusEl.textContent = 'Agent 开始调查…';
+
+  try {
+    const url = `${API}/api/investigate/stream?free_text=${encodeURIComponent(text)}` + (svc.value.trim() ? `&service=${encodeURIComponent(svc.value.trim())}` : '');
+    const resp = await fetch(url);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'step') {
+          const el = document.getElementById('step-' + (ev.step - 1));
+          if (el) { el.classList.add('done'); el.textContent = '✓' + el.textContent; }
+          statusEl.textContent = `正在${ev.label}…`;
+        } else if (ev.type === 'report') {
+          _reportsCache[ev.report.report_id] = ev.report;
+          statusEl.textContent = '调查完成 ✓';
+          await renderReport(ev.report);
+        } else if (ev.type === 'error') {
+          statusEl.textContent = '调查失败: ' + ev.message;
+          alert(ev.message);
+        } else if (ev.type === 'interrupt') {
+          statusEl.textContent = '等待人工确认（HITL）…';
+        }
+      }
+    }
+  } catch(e) { statusEl.textContent = '调查失败: ' + e; }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function renderReport(d) {
   document.getElementById('result').classList.remove('hidden');
-  document.getElementById('report-id').textContent = `#${d.report_id}`;
+  document.getElementById('report-id').textContent = '#' + d.report_id;
 
   document.getElementById('report-header').innerHTML = `
     <span class="badge scenario">${d.scenario}</span>
@@ -169,6 +214,14 @@ async function loadReport(reportId) {
     <div class="ev-row"><span class="badge ${r.priority === 'P0' ? 'critical' : 'warning'}" style="font-size:11px;">${r.priority}</span> ${r.action}</div>`).join('') || '<div class="muted">无建议</div>';
 
   document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadReport(reportId) {
+  if (_reportsCache[reportId]) { renderReport(_reportsCache[reportId]); return; }
+  const r = await fetch(`${API}/api/reports/${reportId}`);
+  const d = await r.json();
+  _reportsCache[reportId] = d;
+  renderReport(d);
 }
 
 loadIncidents();

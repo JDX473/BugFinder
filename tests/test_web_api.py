@@ -1,6 +1,8 @@
-"""Web API 测试（FastAPI TestClient）：事件列表、触发调查、报告详情、错误处理。"""
+"""Web API 测试（FastAPI TestClient）：事件列表、触发调查、报告详情、错误处理、流式调查。"""
 
 from __future__ import annotations
+
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -114,6 +116,36 @@ class TestManualInvestigate:
         r = client.post("/api/investigate", json={"free_text": "订单很慢"})
         assert r.status_code == 200
         assert r.json()["report_id"]
+
+
+class TestStreaming:
+    def test_stream_emits_progress_then_report(self, client):
+        """流式调查：先逐步事件，最后报告。"""
+        with client.stream("GET", "/api/investigate/stream?free_text=用户反馈支付失败&service=checkout") as r:
+            assert r.status_code == 200
+            assert "text/event-stream" in r.headers["content-type"]
+            body = "".join(r.iter_text())
+        events = [json.loads(l[6:]) for l in body.split("\n\n") if l.startswith("data: ")]
+        # 至少 7 步 + 报告
+        steps = [e for e in events if e["type"] == "step"]
+        reports = [e for e in events if e["type"] == "report"]
+        assert len(steps) >= 7
+        assert len(reports) == 1
+        assert reports[0]["report"]["scenario"] == "error_rate_spike"
+        assert reports[0]["report"]["root_cause_candidates"]
+
+    def test_stream_steps_in_order(self, client):
+        """步骤按 1..7 顺序发出。"""
+        with client.stream("GET", "/api/investigate/stream?free_text=订单很慢") as r:
+            body = "".join(r.iter_text())
+        events = [json.loads(l[6:]) for l in body.split("\n\n") if l.startswith("data: ")]
+        steps = [e["step"] for e in events if e["type"] == "step"]
+        assert steps == sorted(steps)
+        assert steps[0] == 1 and steps[-1] == 7
+
+    def test_stream_empty_text_422(self, client):
+        r = client.get("/api/investigate/stream?free_text=")
+        assert r.status_code == 422
 
 
 class TestHome:

@@ -35,11 +35,30 @@ FastAPI (app/web/api.py)
 |---|---|---|
 | `GET /api/incidents` | — | `{incidents: [{incident_id, title, severity, service, triggered_at, desc}]}` |
 | `POST /api/investigate` | body `{free_text, service?, trace_id?}` | `{report_id, incident_id, scenario, status, n_candidates}`（手动触发，RCA-002） |
+| `GET /api/investigate/stream` | query `{free_text, service?, trace_id?}` | **SSE 流式调查**：`step`（进度）→ `report`（最终报告）|
 | `POST /api/incidents/{id}/investigate` | 路径 id | `{report_id, incident_id, scenario, status, n_candidates}` |
 | `GET /api/reports/{report_id}` | 路径 id | 完整 `RCAReport`（Pydantic `model_dump(mode="json")`） |
 | `GET /api/reports` | — | `{reports: [{report_id, incident_id, scenario, status}]}` |
 
 错误处理：未知事件/报告 → 404（含可用列表提示）；调查失败 → 500；空 free_text → 422。
+
+## 流式调查（SSE）
+
+`GET /api/investigate/stream` 用 `StreamingResponse` 推送事件流（`data: {json}\n\n`）：
+- `{"type": "step", "step": 1..7, "name", "label"}`：每步完成后推一次
+- `{"type": "report", "report": {...RCAReport...}}`：最后推完整报告
+- `{"type": "error"}` / `{"type": "interrupt"}`：异常/HITL
+
+实现：`workflow.stream()` yield 每步（langgraph `stream_mode="updates"`），API 层包成 SSE。
+前端 `fetch` + `ReadableStream` 逐行解析，实时更新"调查进度"区块（7 个 step-chip 逐个打勾）。
+
+## 默认 LLM + ReAct
+
+Web 层默认 `create_deepseek_client()` 注入 workflow（`_build_workflow`）：
+- 场景兜底（无指标证据时 LLM 判场景）
+- 假设排序（多候选时 LLM 排名）
+- **有界 ReAct**（日志异常簇时 LLM 决定是否深挖，`_react_log_dig`）
+未配置 `RCA_LLM_API_KEY` 时降级纯规则（`create_deepseek_client` 返回 None）。
 
 ## 前端页面
 

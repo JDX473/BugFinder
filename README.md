@@ -25,6 +25,7 @@
 - [x] 真实 trace 验证：RE2-TT 慢节点定位 52%（耗时高≠根因 → 多信号交叉验证的必要性）
 - [x] 评估基线固化：Top-1 83-85% vs 业界 42-57%（详见 [evaluation-baseline](docs/implementation/evaluation-baseline.md)）
 - [x] 报告 Web 页：FastAPI + 单 HTML 报告台（事件列表 / 触发调查 / 报告详情，RCA-040）
+- [x] Agent 激活：Web 默认注入 DeepSeek（场景兜底/假设排序/ReAct 三注入点）+ 流式调查（SSE 逐步进度）
 - [ ] 反馈闭环（采信/纠偏落库）/ 告警 webhook 接入（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
@@ -108,7 +109,7 @@ print('done:', not wf.is_interrupted(tid))
 # 8. 真实 DeepSeek（需设 RCA_LLM_API_KEY 环境变量）
 RCA_LLM_API_KEY=sk-xxx .venv/Scripts/python scripts/eval_rcaeval.py --limit 125 --llm   # LLM 模式：Top-3 96.0%
 
-# 9. 报告 Web 页（浏览器打开 http://localhost:8787）
+# 9. 报告 Web 页（浏览器打开 http://localhost:8787，可"给 Agent 发消息"流式调查）
 .venv/Scripts/python.exe -m uvicorn app.web.api:app --port 8787
 ```
 

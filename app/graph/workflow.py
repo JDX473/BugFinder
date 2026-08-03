@@ -303,6 +303,70 @@ class RCAWorkflow:
 
         return self._finalize(result, t_start, config)
 
+    def stream(
+        self,
+        incident: IncidentEvent,
+        *,
+        thread_id: str | None = None,
+    ):
+        """流式执行调查：yield 每步进度事件，最后 yield 最终报告。
+
+        用于 Web 前端实时展示"正在做第几步"（SSE）。每步 yield：
+          {"type": "step", "step": int, "name": str, "status": "done"|"skipped"}
+        最后 yield：
+          {"type": "report", "report": dict}
+
+        HITL 中断时 yield {"type": "interrupt", "message": str} 后停止。
+        """
+        t_start = _time.time()
+        tid = thread_id or f"inc-{incident.incident_id}-{int(t_start * 1000)}-{id(incident) % 10000}"
+        config = {"configurable": {"thread_id": tid}}
+
+        initial: dict = {
+            "incident": incident,
+            "evidence": [],
+            "step_index": 0,
+            "meta": {
+                "token_cost": 0,
+                "duration_sec": 0,
+                "token_budget": self.token_budget,
+                "time_budget_sec": self.time_budget_sec,
+                "t0": t_start,
+                "budget_exceeded": False,
+            },
+            "hitl_interrupts": [],
+        }
+
+        step_names = {
+            "1_parse": "事件解析",
+            "2_scenario": "场景判定",
+            "3_trace": "链路重建",
+            "4_logs": "日志分析",
+            "5_metrics": "指标验证",
+            "6_hypotheses": "假设打分",
+            "7_report": "报告生成",
+        }
+        order = list(step_names.keys())
+
+        try:
+            for update in self._graph.stream(initial, config=config, stream_mode="updates"):
+                # update = {node_name: node_output}（每步一个）
+                for node_name in update:
+                    # HITL 中断：interrupt 后 stream 停止，无更多 update
+                    if node_name in step_names:
+                        idx = order.index(node_name) + 1
+                        yield {"type": "step", "step": idx, "name": node_name, "label": step_names[node_name]}
+            # 中断检测
+            st = self._graph.get_state(config)
+            if st.next:
+                yield {"type": "interrupt", "message": "等待人工确认（HITL）", "thread_id": tid}
+                return
+
+            result = self._finalize(dict(st.values), t_start, config)
+            yield {"type": "report", "report": result["report"].model_dump(mode="json")}
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}
+
     def _thread_exists(self, thread_id: str) -> bool:
         """该线程是否已有 checkpoint（非空）？"""
         try:
