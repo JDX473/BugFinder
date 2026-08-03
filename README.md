@@ -6,6 +6,7 @@
 
 - [docs/PRD.md](docs/PRD.md) —— 产品需求文档（v0.1 评审稿，评审通过后进入 MVP 开发）
 - [docs/code-access-strategy.md](docs/code-access-strategy.md) —— 代码/业务文档接入策略（决策记录）
+- [docs/optimization-diary.md](docs/optimization-diary.md) —— 优化日记（踩坑 + 解决办法，与设计文档分开）
 - [docs/research/](docs/research/) —— 业界 RCA 架构调研报告（三份）
   - [01-业界RCA架构全景调研.md](docs/research/01-业界RCA架构全景调研.md)
   - [02-Agentic-RCA工程化实现调研.md](docs/research/02-Agentic-RCA工程化实现调研.md)
