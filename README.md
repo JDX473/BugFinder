@@ -18,11 +18,12 @@
 - [x] PRD：v0.1 评审稿（2026-08-03）
 - [x] MVP 骨架：数据模型、ask_json shim、mock 数据源、traceId 链路重建（CLI 原型）
 - [x] Phase 1 确定性积木：事件归一化、异常检测、日志聚类、场景路由、假设打分、报告生成（端到端"事件 → 报告"已打通）
-- [ ] 编排层：LangGraph 7 步状态机 + 有界 ReAct（下一步）
+- [x] 编排层：LangGraph 7 步状态机（预算路由 + HITL 中断/恢复 + checkpoint + 有界 ReAct harness）
+- [ ] 报告 Web 页 / 真实数据源接入 / 评测回归集（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
-已落地（纯库 + CLI + 测试，零 Web / 零 LangGraph / 零 ReAct）：
+已落地（纯库 + CLI + LangGraph 工作流 + 测试，零 Web）：
 
 | 模块 | 说明 |
 |---|---|
@@ -37,6 +38,10 @@
 | `app/pipeline/scenario_router.py` | 场景路由（6 类场景：指标优先 + 业务白名单 + LLM 兜底，PRD §6.2 步骤 2） |
 | `app/pipeline/hypothesis_scoring.py` | 假设生成/打分（Top-3 候选根因：trace/指标/日志三路生成 + 确定性打分 + LLM 只排序，PRD §6.2 步骤 6） |
 | `app/pipeline/report_generation.py` | 报告生成（RCAReport 组装：校验降级 + 时间线 + 修复建议 + 审计，纯确定性不调 LLM，PRD §6.2 步骤 7） |
+| `app/graph/state.py` | 工作流共享状态（TypedDict + reducer，贯穿 7 步） |
+| `app/graph/nodes.py` | 7 步工作流节点（封装确定性模块，失败降级写占位证据，RCA-012） |
+| `app/graph/workflow.py` | LangGraph 7 步状态机（预算路由 + HITL 中断/恢复 + checkpoint，PRD §6.1） |
+| `app/graph/bounded_react.py` | 有界 ReAct harness（max_iters≈4 + 工具受限 + ask_json 强约束 + 证据压制，PRD §6.3） |
 | `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由 / 一键产出报告 |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
@@ -64,6 +69,26 @@ python -m venv .venv
 # 5. 一键产出完整 RCAReport（全流程：场景→trace→日志→指标→假设→报告）
 .venv/Scripts/python scripts/run_trace_rebuild.py --report --scenario "用户反馈支付失败" --service checkout --trace-id tr-mock-0001   # error_rate 场景 + trace 假设
 .venv/Scripts/python scripts/run_trace_rebuild.py --report --scenario "用户反馈车门打不开" --service car-door                          # business_logic + 业务上下文
+
+# 6. LangGraph 工作流（7 步状态机，Python API）
+.venv/Scripts/python -c "
+from app.graph.workflow import RCAWorkflow
+from app.pipeline.event_normalizer import normalize_alert_payload
+wf = RCAWorkflow()
+incident = normalize_alert_payload({'title': 'checkout error_rate 异常', 'service': 'checkout', 'timestamp': '2026-08-02T21:00:00Z', 'trace_id': 'tr-mock-0001'})
+report = wf.invoke(incident)['report']
+print(report.scenario.value, report.meta.status.value, len(report.root_cause_candidates))
+"
+# HITL：hitl=True 时在调查开始前中断等人工确认，resume 恢复
+.venv/Scripts/python -c "
+from app.graph.workflow import RCAWorkflow
+from app.pipeline.event_normalizer import normalize_alert_payload
+wf = RCAWorkflow(hitl=True)
+incident = normalize_alert_payload({'title': 'checkout error_rate 异常', 'service': 'checkout', 'timestamp': '2026-08-02T21:00:00Z'})
+tid = 'demo'; wf.invoke(incident, thread_id=tid)                 # 停在中断点
+wf.invoke(incident, thread_id=tid, resume_value='确认')          # 恢复调查
+print('done:', not wf.is_interrupted(tid))
+"
 ```
 
 ### 环境变量
