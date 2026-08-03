@@ -34,15 +34,18 @@ FastAPI (app/web/api.py)
 | 端点 | 入参 | 返回 |
 |---|---|---|
 | `GET /api/incidents` | — | `{incidents: [{incident_id, title, severity, service, triggered_at, desc}]}` |
+| `POST /api/investigate` | body `{free_text, service?, trace_id?}` | `{report_id, incident_id, scenario, status, n_candidates}`（手动触发，RCA-002） |
 | `POST /api/incidents/{id}/investigate` | 路径 id | `{report_id, incident_id, scenario, status, n_candidates}` |
 | `GET /api/reports/{report_id}` | 路径 id | 完整 `RCAReport`（Pydantic `model_dump(mode="json")`） |
 | `GET /api/reports` | — | `{reports: [{report_id, incident_id, scenario, status}]}` |
 
-错误处理：未知事件/报告 → 404（含可用列表提示）；调查失败 → 500。
+错误处理：未知事件/报告 → 404（含可用列表提示）；调查失败 → 500；空 free_text → 422。
 
 ## 前端页面
 
 单 HTML（`index.html`）+ 原生 JS，无构建（无 React/Vue，符合"MVP 骨架"定位）：
+- **给 Agent 发消息**：自由文本输入框 + 可选服务名，手动触发调查（RCA-002）——值班人
+  直接描述故障即可发起
 - **事件列表**：mock 预设的 2 个故障样例（error_rate + 业务故障），带严重度徽章
 - **触发调查**：点"调查 →"调 investigate，产出报告后滚动到报告区
 - **报告详情**：根因候选（rank/置信度/假设/推理/证据引用）、时间线（cause/symptom）、

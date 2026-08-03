@@ -48,6 +48,18 @@
   <div class="sub">MVP 骨架 · mock 数据源 · 事件 → 场景 → 链路 → 日志 → 指标 → 假设 → 报告</div>
 
   <div class="card">
+    <h2>给 Agent 发消息</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <input id="msg-input" type="text" placeholder="描述故障，如：用户反馈支付失败 / checkout 错误率飙升 / 车门打不开…"
+             style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:13px;">
+      <input id="msg-service" type="text" placeholder="服务名（可选，如 checkout）"
+             style="width:150px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 12px;font-size:13px;">
+      <button onclick="sendMessage()">发送 →</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px;">用一句话描述故障，可选填服务名辅助定位。走手动触发调查（RCA-002）。</div>
+  </div>
+
+  <div class="card">
     <h2>事件列表</h2>
     <div id="incidents"><div id="loading">加载中…</div></div>
   </div>
@@ -91,6 +103,27 @@ async function loadIncidents() {
         <button onclick="investigate('${inc.incident_id}')">调查 →</button>
       </div>`).join('');
   } catch(e) { el.innerHTML = `<div class="muted">加载失败: ${e}</div>`; }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const svc = document.getElementById('msg-service');
+  const text = input.value.trim();
+  if (!text) { alert('请先描述故障'); return; }
+  const btn = document.querySelector('.card button');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/investigate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ free_text: text, service: svc.value.trim() || null }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '调查失败'); return; }
+    input.value = '';
+    await loadReport(d.report_id);
+  } catch(e) { alert('调查失败: ' + e); }
+  finally { if (btn) btn.disabled = false; }
 }
 
 async function investigate(id) {

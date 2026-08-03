@@ -85,8 +85,40 @@ class TestReportDetail:
         assert r.json()["reports"]
 
 
+class TestManualInvestigate:
+    def test_manual_text(self, client):
+        """给 Agent 发消息：自由文本触发调查（RCA-002）。"""
+        r = client.post("/api/investigate", json={"free_text": "用户反馈支付失败", "service": "checkout"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["report_id"]
+        assert d["status"] == "completed"
+        assert d["scenario"] == "error_rate_spike"
+
+    def test_manual_business_text(self, client):
+        """业务文本 → business_logic + 业务上下文。"""
+        r = client.post("/api/investigate", json={"free_text": "用户反馈车门打不开", "service": "car-door"})
+        d = r.json()
+        assert d["scenario"] == "business_logic"
+        # 报告里业务上下文正确
+        rid = d["report_id"]
+        rep = client.get(f"/api/reports/{rid}").json()
+        assert rep["business_context"]["entity"] == "车门"
+
+    def test_manual_empty_text_422(self, client):
+        r = client.post("/api/investigate", json={"free_text": "  "})
+        assert r.status_code == 422
+
+    def test_manual_no_service(self, client):
+        """无 service 也能调查（降级：无指标过滤）。"""
+        r = client.post("/api/investigate", json={"free_text": "订单很慢"})
+        assert r.status_code == 200
+        assert r.json()["report_id"]
+
+
 class TestHome:
     def test_home_page(self, client):
         r = client.get("/")
         assert r.status_code == 200
         assert "RCA Agent 报告台" in r.text
+        assert "给 Agent 发消息" in r.text  # 手动触发入口存在

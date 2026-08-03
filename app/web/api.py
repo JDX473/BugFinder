@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from app.graph.workflow import RCAWorkflow
 from app.pipeline.event_normalizer import normalize_alert_payload
@@ -69,6 +70,37 @@ def _to_dict(incident: dict) -> dict:
         "service": incident["service"],
         "triggered_at": incident["timestamp"],
         "desc": incident["desc"],
+    }
+
+
+class ManualInvestigate(BaseModel):
+    """手动触发调查的请求体（PRD RCA-002：自由文本/服务/traceId 发起调查）。"""
+
+    free_text: str = Field(description="事件描述（告警标题或人工描述）")
+    service: str | None = Field(default=None, description="关联服务名（过滤指标/日志）")
+    trace_id: str | None = Field(default=None, description="traceId（链路重建用）")
+
+
+@app.post("/api/investigate")
+def investigate_manual(body: ManualInvestigate) -> dict:
+    """手动触发调查（RCA-002）：给 Agent 发消息，用自由文本/服务/traceId 发起。"""
+    if not body.free_text.strip():
+        raise HTTPException(status_code=422, detail="free_text 不能为空")
+    try:
+        out = _workflow.invoke_manual(
+            service=body.service, free_text=body.free_text, trace_id=body.trace_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"调查失败: {e}")
+
+    report = out["report"]
+    _reports[report.report_id] = report
+    return {
+        "report_id": report.report_id,
+        "incident_id": report.incident_id,
+        "scenario": report.scenario.value,
+        "status": report.meta.status.value,
+        "n_candidates": len(report.root_cause_candidates),
     }
 
 
