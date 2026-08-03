@@ -114,6 +114,19 @@ class RpcDirection(StrEnum):
     IN = "in"  # 本服务接收请求
 
 
+class ExtractionSource(StrEnum):
+    """业务上下文 / 场景判定的抽取来源（审计与 debug）。
+
+    - rule：确定性规则抽取（白名单命中），置信度 1.0
+    - llm：LLM 兜底抽取，带模型置信度
+    - none：未抽到（空上下文）
+    """
+
+    RULE = "rule"
+    LLM = "llm"
+    NONE = "none"
+
+
 # ---------------------------------------------------------------- 时间与公共小件
 
 class TimeRange(BaseSchema):
@@ -154,7 +167,21 @@ class BusinessContext(BaseSchema):
     symptom: str = ""  # 业务症状（车门打不开/支付失败/订单卡住…）
     action: str = ""  # 用户动作（开门/下单/发起支付…）
     confidence: float = 0.0  # 0~1：抽取置信度（规则抽取=1.0，LLM 兜底带分）
-    source: str = "none"  # 抽取来源：rule / llm / none（debug 与审计用）
+    source: ExtractionSource = ExtractionSource.NONE  # 抽取来源（rule / llm / none）
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _coerce_source(cls, v: Any) -> Any:
+        # 宽容解析外部数据：裸字符串（含历史数据 "rule"/"llm"）自动映射为枚举；
+        # 未知值落 NONE（保持 extra="ignore" 的宽容哲学，不破坏序列化）。
+        if isinstance(v, ExtractionSource):
+            return v
+        if isinstance(v, str):
+            try:
+                return ExtractionSource(v)
+            except ValueError:
+                return ExtractionSource.NONE
+        return v
 
     @property
     def is_present(self) -> bool:
@@ -333,6 +360,7 @@ class RCAReport(BaseSchema):
     incident_id: str
     created_at: UTCDateTime
     scenario: ScenarioType = ScenarioType.OTHER
+    business_context: BusinessContext = Field(default_factory=BusinessContext)  # 业务上下文（技术信号干净时的业务语义）
     # evidence_list 必须先于 root_cause_candidates 校验，
     # 候选的 supporting/refuting 引用一致性校验依赖 evidence_list 已就绪。
     evidence_list: list[Evidence] = Field(default_factory=list)

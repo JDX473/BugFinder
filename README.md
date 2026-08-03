@@ -16,7 +16,9 @@
 
 - [x] 调研：业界 RCA 架构 / Agentic RCA 工程化 / 评测与业界案例（2026-08）
 - [x] PRD：v0.1 评审稿（2026-08-03）
-- [ ] MVP 开发（进行中）：已完成骨架阶段——数据模型、ask_json shim、mock 数据源、traceId 链路重建（CLI 原型）
+- [x] MVP 骨架：数据模型、ask_json shim、mock 数据源、traceId 链路重建（CLI 原型）
+- [x] Phase 1 确定性积木：事件归一化、异常检测、日志聚类、场景路由、假设打分、报告生成（端到端"事件 → 报告"已打通）
+- [ ] 编排层：LangGraph 7 步状态机 + 有界 ReAct（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
@@ -33,7 +35,9 @@
 | `app/pipeline/event_normalizer.py` | 事件接收/归一化 + 去重（脏告警→IncidentEvent，RCA-003/004） |
 | `app/pipeline/log_clustering.py` | 日志聚类/降噪（噪音过滤 + 模板聚类 + 簇摘要，PRD §5.1/§6.2 步骤 4） |
 | `app/pipeline/scenario_router.py` | 场景路由（6 类场景：指标优先 + 业务白名单 + LLM 兜底，PRD §6.2 步骤 2） |
-| `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由演示 |
+| `app/pipeline/hypothesis_scoring.py` | 假设生成/打分（Top-3 候选根因：trace/指标/日志三路生成 + 确定性打分 + LLM 只排序，PRD §6.2 步骤 6） |
+| `app/pipeline/report_generation.py` | 报告生成（RCAReport 组装：校验降级 + 时间线 + 修复建议 + 审计，纯确定性不调 LLM，PRD §6.2 步骤 7） |
+| `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由 / 一键产出报告 |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
 
@@ -56,6 +60,10 @@ python -m venv .venv
 # 4. 场景路由演示（--service 限定服务指标）
 .venv/Scripts/python scripts/run_trace_rebuild.py --scenario "用户反馈支付失败" --service checkout   # → error_rate_spike
 .venv/Scripts/python scripts/run_trace_rebuild.py --scenario "用户反馈车门打不开" --service car-door  # → business_logic
+
+# 5. 一键产出完整 RCAReport（全流程：场景→trace→日志→指标→假设→报告）
+.venv/Scripts/python scripts/run_trace_rebuild.py --report --scenario "用户反馈支付失败" --service checkout --trace-id tr-mock-0001   # error_rate 场景 + trace 假设
+.venv/Scripts/python scripts/run_trace_rebuild.py --report --scenario "用户反馈车门打不开" --service car-door                          # business_logic + 业务上下文
 ```
 
 ### 环境变量
