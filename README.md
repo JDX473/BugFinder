@@ -18,21 +18,22 @@
 - [x] PRD：v0.1 评审稿（2026-08-03）
 - [ ] MVP 开发（进行中）：已完成骨架阶段——数据模型、ask_json shim、mock 数据源、traceId 链路重建（CLI 原型）
 
-## 开发状态（MVP 骨架，Phase 0）
+## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
 已落地（纯库 + CLI + 测试，零 Web / 零 LangGraph / 零 ReAct）：
 
 | 模块 | 说明 |
 |---|---|
-| `app/schema/models.py` | IncidentEvent / Evidence / RCAReport（Pydantic，PRD §8 唯一权威实现） |
+| `app/schema/models.py` | IncidentEvent / Evidence / RCAReport / BusinessContext（Pydantic，PRD §8 唯一权威实现） |
 | `app/llm/ask_json.py` | DeepSeek 结构化输出 shim（提示词约束→json.loads→jsonschema→≤3 重试→确定性兜底） |
 | `app/tools/base.py` | 数据源适配器协议 + 查询护栏（时间窗/白名单/上限） |
-| `app/tools/mock_datasource.py` | mock 数据源（gateway→checkout→payment 故障场景，离线开发/测试） |
+| `app/tools/mock_datasource.py` | mock 数据源（gateway→checkout→payment 故障 + car-door 业务故障，离线开发/测试） |
 | `app/tools/trace_reconstruction.py` | traceId 聚合重建调用链（PRD §5.3 关键路径，强/弱重建 + 慢错定位） |
 | `app/pipeline/anomaly_detection.py` | MAD/3σ 指标异常检测（确定性，形态/起始时间/幅度，PRD §5.2） |
 | `app/pipeline/event_normalizer.py` | 事件接收/归一化 + 去重（脏告警→IncidentEvent，RCA-003/004） |
 | `app/pipeline/log_clustering.py` | 日志聚类/降噪（噪音过滤 + 模板聚类 + 簇摘要，PRD §5.1/§6.2 步骤 4） |
-| `scripts/run_trace_rebuild.py` | CLI 原型：traceId → 粗糙调用序列 |
+| `app/pipeline/scenario_router.py` | 场景路由（6 类场景：指标优先 + 业务白名单 + LLM 兜底，PRD §6.2 步骤 2） |
+| `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由演示 |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
 
@@ -47,9 +48,14 @@ python -m venv .venv
 .venv/Scripts/pytest
 
 # 3. 用 mock 数据源试 CLI（无需任何线上配置）
-.venv/Scripts/python scripts/run_trace_rebuild.py tr-mock-0001   # 故障 trace
+.venv/Scripts/python scripts/run_trace_rebuild.py tr-mock-0001   # 故障 trace（重建 + 日志聚类）
 .venv/Scripts/python scripts/run_trace_rebuild.py tr-mock-0002   # 正常 trace（基线对比）
+.venv/Scripts/python scripts/run_trace_rebuild.py tr-mock-0003   # 业务故障（车门打不开）
 .venv/Scripts/python scripts/run_trace_rebuild.py --list         # 列出可用 traceId
+
+# 4. 场景路由演示（--service 限定服务指标）
+.venv/Scripts/python scripts/run_trace_rebuild.py --scenario "用户反馈支付失败" --service checkout   # → error_rate_spike
+.venv/Scripts/python scripts/run_trace_rebuild.py --scenario "用户反馈车门打不开" --service car-door  # → business_logic
 ```
 
 ### 环境变量

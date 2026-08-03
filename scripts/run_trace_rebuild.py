@@ -37,6 +37,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trace-id", dest="trace_id_opt", help="同位置参数，供习惯 --key 的调用")
     parser.add_argument("--list", action="store_true", help="列出 mock 数据源可用的 traceId")
     parser.add_argument("--cluster", action="store_true", help="对 trace 日志做聚类降噪，打印异常簇摘要")
+    parser.add_argument(
+        "--scenario",
+        metavar="TEXT",
+        help="场景路由演示：对给定事件文本做场景判定（mock 指标按 --service 过滤）",
+    )
+    parser.add_argument(
+        "--service",
+        metavar="SVC",
+        help="场景路由演示用：限定该服务的指标序列（如 checkout / car-door）",
+    )
     args = parser.parse_args(argv)
 
     if args.list:
@@ -45,6 +55,28 @@ def main(argv: list[str] | None = None) -> int:
             print("（无可用 traceId）")
         for tid in ids:
             print(tid)
+        return 0
+
+    if args.scenario:
+        from app.pipeline.anomaly_detection import detect_anomaly
+        from app.pipeline.scenario_router import route_scenario
+        from app.tools.mock_datasource import MockMetricDatasource
+
+        # 事件时间窗：取事件所属服务的全部指标序列做异常检测（含正常结果，
+        # 供路由判断"技术信号干净"）
+        metric_src = MockMetricDatasource()
+        series = list(metric_src.series.values())
+        if args.service:
+            series = [s for s in series if s.labels.get("service") == args.service]
+        all_results = [detect_anomaly(s) for s in series]
+        result = route_scenario(incident_text=args.scenario, anomalies=all_results, llm=None)
+        print("场景路由：")
+        print(result.to_summary())
+        abnormal = [a for a in all_results if a.is_anomaly]
+        if abnormal:
+            print(f"异常指标 {len(abnormal)} 个：")
+            for a in abnormal:
+                print(f"  - {a.metric}: {a.shape.value} (ratio {a.ratio:.2f})")
         return 0
 
     trace_id = args.trace_id or args.trace_id_opt
