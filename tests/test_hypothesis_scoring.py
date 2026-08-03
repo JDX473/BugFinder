@@ -317,3 +317,43 @@ def test_to_summary_has_candidates():
     s = r.to_summary()
     assert "规则兜底" in s
     assert "rank1" in s
+
+
+def test_multiple_anomaly_services_generates_multiple_hypotheses():
+    """多服务异常 → 每个服务生成一个假设（Top-3 多样性，真实数据回归）。"""
+    from app.pipeline.anomaly_detection import AnomalyShape, MetricAnomaly
+    from datetime import timedelta
+
+    anomalies = [
+        MetricAnomaly(metric="adservice_latency", shape=AnomalyShape.RISE, baseline_mean=0.1,
+                      anomaly_start=T0 + timedelta(seconds=20), current_mean=2.0, ratio=20.0,
+                      detail="rise", is_anomaly=True),
+        MetricAnomaly(metric="cartservice_latency", shape=AnomalyShape.RISE, baseline_mean=0.1,
+                      anomaly_start=T0 + timedelta(seconds=10), current_mean=0.5, ratio=5.0,
+                      detail="rise", is_anomaly=True),
+    ]
+    evs = [_metric_ev("ev-metric", anomalies)]
+    r = generate_hypotheses(evidence=evs, scenario=_error_scenario(), event_start=T0)
+    # 两个服务 → 两个候选（不只 1 个）
+    assert len(r.candidates) == 2
+    # 幅度最大的服务（adservice，ratio 20）优先于列表第一个（cartservice）
+    assert "adservice" in r.candidates[0].hypothesis
+
+
+def test_strongest_anomaly_service_first():
+    """幅度最大（|ratio| 最大）的异常服务优先（真实数据回归：列表顺序不可靠）。"""
+    from app.pipeline.anomaly_detection import AnomalyShape, MetricAnomaly
+    from datetime import timedelta
+
+    # 输入顺序：cartservice 在前（列表第一个），但 adservice 幅度最大
+    anomalies = [
+        MetricAnomaly(metric="cartservice_latency", shape=AnomalyShape.RISE, baseline_mean=0.1,
+                      anomaly_start=T0 + timedelta(seconds=10), current_mean=0.5, ratio=5.0,
+                      detail="rise", is_anomaly=True),
+        MetricAnomaly(metric="adservice_latency", shape=AnomalyShape.RISE, baseline_mean=0.1,
+                      anomaly_start=T0 + timedelta(seconds=20), current_mean=2.0, ratio=20.0,
+                      detail="rise", is_anomaly=True),
+    ]
+    evs = [_metric_ev("ev-metric", anomalies)]
+    r = generate_hypotheses(evidence=evs, scenario=_error_scenario(), event_start=T0)
+    assert "adservice" in r.candidates[0].hypothesis  # 幅度最大者 rank1
