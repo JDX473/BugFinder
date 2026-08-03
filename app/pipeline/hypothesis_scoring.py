@@ -214,14 +214,14 @@ def _build_metric_hypotheses(views: list[_EvidenceView], scenario: ScenarioResul
     if not anomalies:
         return hyps
 
-    # 指标证据的负载服务：优先取指标名前缀（checkout_error_rate → checkout）
-    svc = None
-    for v in views:
-        if v.metric_anomalies:
-            svc = v.svc or _svc_from_metric(v.metric_anomalies[0].metric)
-            break
-    if svc is None:
-        svc = _svc_from_metric(anomalies[0].metric)
+    # 指标证据的负载服务：选**幅度最大（|ratio| 最大）**的异常推导服务——
+    # 幅度是信号强度，比"列表第一个"更指示根因所在服务（真实数据下
+    # 列表顺序不可靠，见 RCAEval 评估：checkout 先异常 ≠ 根因是 checkout）。
+    # 同时按服务分组生成多个假设（多服务异常 → 多候选，Top-3 有多样性）。
+    svc_to_anomalies: dict[str, list[MetricAnomaly]] = {}
+    for a in anomalies:
+        svc = _svc_from_metric(a.metric)
+        svc_to_anomalies.setdefault(svc, []).append(a)
 
     template = _SCENARIO_HYPOTHESIS.get(scenario.scenario, _FALLBACK_HYPOTHESIS_TEXT)
     refs = [v.ref for v in views if v.metric_anomalies]
@@ -234,17 +234,21 @@ def _build_metric_hypotheses(views: list[_EvidenceView], scenario: ScenarioResul
         ScenarioType.OTHER: 1.0,
     }.get(scenario.scenario, 1.0)
 
-    earliest = min((a.anomaly_start for a in anomalies if a.anomaly_start), default=None)
-    hyp = {
-        "hypothesis": template.format(svc=svc),
-        "evidence": refs,
-        "refuting": [],
-        "priority": priority,
-        "earliest": earliest,
-        "svc": svc,
-        "kind": "metric",
-    }
-    hyps.append(hyp)
+    # 每个异常服务生成一个假设；幅度最大的服务优先（score 后排序自然体现）
+    for svc, svc_anoms in svc_to_anomalies.items():
+        earliest = min((a.anomaly_start for a in svc_anoms if a.anomaly_start), default=None)
+        # 服务级基础分：该服务幅度最大的异常 ratio 作为置信度参考
+        strongest = max(svc_anoms, key=lambda a: abs(a.ratio))
+        svc_priority = priority + min(0.5, abs(strongest.ratio) / 50.0)  # 幅度加成
+        hyps.append({
+            "hypothesis": template.format(svc=svc),
+            "evidence": refs,
+            "refuting": [],
+            "priority": svc_priority,
+            "earliest": earliest,
+            "svc": svc,
+            "kind": "metric",
+        })
     return hyps
 
 
