@@ -120,19 +120,28 @@ class RcaEvalMetricSource(MetricQuery):
         return self.cases[key]
 
     def load_case_csv(self, key: str) -> list[dict]:
-        """加载一个 case 的 data.csv（返回行 dict 列表）。
+        """加载一个 case 的指标 CSV（返回行 dict 列表）。
 
-        用 rglob 定位（数据可能嵌套在 RE1-OB/RE1-OB/ 下），不硬拼路径。
+        RE1 用 `data.csv`，RE2 用 `metrics.csv`——按存在性探测。用 rglob
+        定位（数据可能嵌套），不硬拼路径。
         """
         case = self.case(key)
         target_dir = self.root / f"{case.service}_{case.fault}" / str(case.instance)
-        csv_file = target_dir / "data.csv"
-        if not csv_file.exists():
-            # 嵌套层级兜底：递归找 {service}_{fault}/{instance}/data.csv
-            matches = list(self.root.rglob(f"{case.service}_{case.fault}/{case.instance}/data.csv"))
-            if not matches:
-                raise RcaEvalDataError(f"case {key} 缺 data.csv（找过 {target_dir} 与递归）")
-            csv_file = matches[0]
+        csv_file = None
+        for name in ("data.csv", "metrics.csv", "simple_metrics.csv"):
+            cand = target_dir / name
+            if cand.exists():
+                csv_file = cand
+                break
+        if csv_file is None:
+            # 嵌套层级兜底：递归找 {service}_{fault}/{instance}/任一指标 CSV
+            for name in ("data.csv", "metrics.csv", "simple_metrics.csv"):
+                matches = list(self.root.rglob(f"{case.service}_{case.fault}/{case.instance}/{name}"))
+                if matches:
+                    csv_file = matches[0]
+                    break
+            if csv_file is None:
+                raise RcaEvalDataError(f"case {key} 缺指标 CSV（找过 {target_dir} 与递归）")
         with open(csv_file, newline="", encoding="utf-8") as f:
             return list(csv.DictReader(f))
 
@@ -145,7 +154,7 @@ class RcaEvalMetricSource(MetricQuery):
                 ts = _epoch_to_utc(float(r["time"]))
                 val = float(r[metric])
             except (KeyError, ValueError):
-                continue
+                continue  # 空值/脏数据跳过（RE2 metrics.csv 有缺失值）
             pts.append(MetricPoint(ts=ts, value=val))
         return MetricSeries(metric=metric, labels={}, points=pts)
 
@@ -201,7 +210,7 @@ class RcaEvalMetricSource(MetricQuery):
                     ts = _epoch_to_utc(float(r["time"]))
                     val = float(r[col])
                 except (KeyError, ValueError):
-                    continue
+                    continue  # 空值/脏数据跳过
                 pts.append(MetricPoint(ts=ts, value=val))
             if pts:
                 series_list.append(MetricSeries(metric=col, labels={}, points=pts))
