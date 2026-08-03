@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCA Agent 报告台</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a222c; --border:#2b3644; --text:#e6edf3; --muted:#8b98a5; --accent:#4a9eff; --good:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif; padding:24px; line-height:1.5; }
+  h1 { font-size:22px; margin-bottom:4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px; margin-bottom:16px; }
+  .card h2 { font-size:16px; margin-bottom:12px; color:var(--accent); }
+  .incident { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card); border:1px solid var(--border); border-radius:8px; margin-bottom:10px; }
+  .incident .title { font-weight:600; }
+  .incident .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; margin-right:6px; }
+  .badge.critical { background:#3d1416; color:var(--bad); }
+  .badge.warning { background:#3d2c0e; color:var(--warn); }
+  .badge.scenario { background:#0e2c3d; color:var(--accent); }
+  .badge.high { background:#0d2d1a; color:var(--good); }
+  .badge.medium { background:#3d2c0e; color:var(--warn); }
+  .badge.low { background:#3d1416; color:var(--bad); }
+  .badge.status { background:#0e2c3d; color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:disabled { opacity:0.5; cursor:not-allowed; }
+  button.secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
+  .candidate { padding:10px 0; border-bottom:1px solid var(--border); }
+  .candidate:last-child { border-bottom:none; }
+  .candidate .rank { color:var(--accent); font-weight:700; }
+  .candidate .hypo { font-weight:600; margin-top:2px; }
+  .candidate .reason { color:var(--muted); font-size:12px; margin-top:4px; }
+  .ev-row { font-size:13px; padding:6px 0; border-bottom:1px solid var(--border); }
+  .ev-row:last-child { border-bottom:none; }
+  .ev-row .etype { color:var(--accent); }
+  .tl-row { font-size:13px; padding:6px 0; border-bottom:1px solid var(--border); }
+  .tl-row .time { color:var(--muted); font-family:monospace; }
+  .muted { color:var(--muted); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:900px){ .grid{ grid-template-columns:1fr; } }
+  .hidden { display:none; }
+  #loading { text-align:center; color:var(--muted); padding:20px; }
+</style>
+</head>
+<body>
+  <h1>🔍 RCA Agent 报告台</h1>
+  <div class="sub">MVP 骨架 · mock 数据源 · 事件 → 场景 → 链路 → 日志 → 指标 → 假设 → 报告</div>
+
+  <div class="card">
+    <h2>事件列表</h2>
+    <div id="incidents"><div id="loading">加载中…</div></div>
+  </div>
+
+  <div id="result" class="hidden">
+    <div class="card">
+      <h2>报告 <span id="report-id" class="muted"></span></h2>
+      <div id="report-header" style="margin-bottom:10px;"></div>
+      <div class="grid">
+        <div>
+          <h3 style="margin-bottom:8px;font-size:14px;color:var(--muted);">根因候选</h3>
+          <div id="candidates"></div>
+        </div>
+        <div>
+          <h3 style="margin-bottom:8px;font-size:14px;color:var(--muted);">时间线</h3>
+          <div id="timeline"></div>
+        </div>
+      </div>
+      <h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--muted);">证据链</h3>
+      <div id="evidence"></div>
+      <h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--muted);">修复建议</h3>
+      <div id="remediation"></div>
+    </div>
+  </div>
+
+<script>
+const API = '';
+
+async function loadIncidents() {
+  const el = document.getElementById('incidents');
+  try {
+    const r = await fetch(`${API}/api/incidents`);
+    const d = await r.json();
+    el.innerHTML = d.incidents.map(inc => `
+      <div class="incident">
+        <div>
+          <span class="badge ${inc.severity}">${inc.severity}</span>
+          <span class="title">${inc.title}</span>
+          <div class="meta">${inc.incident_id} · ${inc.service} · ${inc.triggered_at} · ${inc.desc}</div>
+        </div>
+        <button onclick="investigate('${inc.incident_id}')">调查 →</button>
+      </div>`).join('');
+  } catch(e) { el.innerHTML = `<div class="muted">加载失败: ${e}</div>`; }
+}
+
+async function investigate(id) {
+  const btns = document.querySelectorAll('button');
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(`${API}/api/incidents/${id}/investigate`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { alert(d.detail || '调查失败'); return; }
+    await loadReport(d.report_id);
+  } catch(e) { alert('调查失败: ' + e); }
+  finally { btns.forEach(b => b.disabled = false); }
+}
+
+async function loadReport(reportId) {
+  const r = await fetch(`${API}/api/reports/${reportId}`);
+  const d = await r.json();
+  document.getElementById('result').classList.remove('hidden');
+  document.getElementById('report-id').textContent = `#${d.report_id}`;
+
+  document.getElementById('report-header').innerHTML = `
+    <span class="badge scenario">${d.scenario}</span>
+    <span class="badge status">${d.meta.status}</span>
+    <span class="muted" style="margin-left:8px;">事件 ${d.incident_id} · 创建 ${d.created_at}</span>
+    ${d.business_context && d.business_context.entity ? `<div class="muted" style="margin-top:6px;">业务上下文: ${d.business_context.entity}/${d.business_context.symptom}</div>` : ''}`;
+
+  document.getElementById('candidates').innerHTML = d.root_cause_candidates.length ? d.root_cause_candidates.map(c => `
+    <div class="candidate">
+      <span class="rank">rank ${c.rank}</span>
+      <span class="badge ${c.confidence_level}">${(c.confidence*100).toFixed(0)}%</span>
+      <div class="hypo">${c.hypothesis}</div>
+      <div class="reason">${c.reasoning}</div>
+      ${c.supporting_evidence.length ? `<div class="reason">支持: ${c.supporting_evidence.join(', ')}</div>` : ''}
+    </div>`).join('') : '<div class="muted">无候选</div>';
+
+  document.getElementById('timeline').innerHTML = d.timeline.map(t => `
+    <div class="tl-row"><span class="time">${t.at}</span> <span class="badge scenario" style="font-size:11px;">${t.significance}</span> ${t.event}</div>`).join('');
+
+  document.getElementById('evidence').innerHTML = d.evidence_list.map(e => `
+    <div class="ev-row"><span class="etype">[${e.type}]</span> <b>${e.evidence_id}</b> · ${e.summary} ${e.error ? '<span class="badge low">失败</span>' : ''}</div>`).join('');
+
+  document.getElementById('remediation').innerHTML = d.remediation_suggestions.map(r => `
+    <div class="ev-row"><span class="badge ${r.priority === 'P0' ? 'critical' : 'warning'}" style="font-size:11px;">${r.priority}</span> ${r.action}</div>`).join('') || '<div class="muted">无建议</div>';
+
+  document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+}
+
+loadIncidents();
+</script>
+</body>
+</html>

@@ -188,3 +188,22 @@
   优先 91% + trace 候选 + 日志异常簇）弥补，不单靠 trace。
 - **避坑**：**单信号定位必须在小样本上怀疑**——10 case 的 90% 会被全量 90 case 的
   52% 打脸。用全量评估，且"命中率"要看够大的样本才有意义。
+
+### #27 LangGraph TypedDict 缺字段 → 节点返回被静默丢弃（指标结果丢失）
+- **坑**：`make_scenario_node` 返回 `metric_series` / `metric_anomalies` 两个 key，但
+  `WorkflowState` 的 TypedDict **没声明这两个字段**。langgraph 静默丢弃未声明字段
+  （不报错），导致步骤 5 的 `make_metrics_node` 读不到指标 → 报告里 `ev-metric`
+  变成"失败：无指标序列"占位。**只有浏览器看报告时才暴露**（CLI 的 --report 是
+  手动传指标，不走 state）。
+- **根因**：langgraph 的 TypedDict schema 是白名单——节点返回未声明字段被忽略，
+  不是报错。
+- **解决**：`WorkflowState` 补 `metric_series` / `metric_anomalies` 字段声明。
+- **避坑**：**langgraph 节点返回的每个 key 都必须先在 WorkflowState 声明**。
+  测试要覆盖"节点 A 产出 → 节点 B 消费"的端到端路径（这次 CLI 测试没覆盖
+  state 传递，只有 Web 页暴露）。
+
+### #28 浏览器验证暴露"修改后未重启服务"（旧代码仍在跑）
+- **坑**：改完 `state.py` 后浏览器仍显示失败证据——因为 uvicorn 无热重载，
+  跑的还是修改前的进程。
+- **解决**：改代码后 `preview_stop` + `preview_start` 重启服务再验证。
+- **避坑**：浏览器验证前确认服务加载的是最新代码（无热重载时手动重启）。

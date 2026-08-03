@@ -43,6 +43,8 @@ class WorkflowState(TypedDict, total=False):
 
     # ---- 各步产物 ----
     scenario: Any  # 场景路由结果（ScenarioResult，步骤 2）
+    metric_series: Any  # 步骤 2 查询的指标序列（list[MetricSeries]，供步骤 5 消费）
+    metric_anomalies: Any  # 步骤 2 检测的异常结果（list[MetricAnomaly] 含正常，供步骤 5 落证据）
     graph: Any  # trace 重建图（TraceGraph，步骤 3）
     evidence: Annotated[list, operator.add]  # 已采集的全部证据（步骤 3~5 累加）
     hypotheses: Any  # 假设打分结果（HypothesisScoringResult，步骤 6）

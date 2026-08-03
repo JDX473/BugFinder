@@ -24,7 +24,8 @@
 - [x] 真实 LLM 接入：DeepSeek 三注入点接通（场景兜底/假设排序/日志深挖），规则 vs LLM 全量对比（Top-3 96.0%）
 - [x] 真实 trace 验证：RE2-TT 慢节点定位 52%（耗时高≠根因 → 多信号交叉验证的必要性）
 - [x] 评估基线固化：Top-1 83-85% vs 业界 42-57%（详见 [evaluation-baseline](docs/implementation/evaluation-baseline.md)）
-- [ ] 报告 Web 页 / 反馈闭环 / traceId 日志重建验证（下一步）
+- [x] 报告 Web 页：FastAPI + 单 HTML 报告台（事件列表 / 触发调查 / 报告详情，RCA-040）
+- [ ] 反馈闭环（采信/纠偏落库）/ 告警 webhook 接入（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
@@ -51,6 +52,8 @@
 | `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由 / 一键产出报告 |
 | `scripts/eval_rcaeval.py` | 真实数据评估（RCAEval RE1/RE2 指标，Top-1/Top-3 命中率，PRD §9 雏形） |
 | `scripts/verify_re2_trace.py` | RE2-TT 真实 trace 验证（调用链还原 + 慢节点定位，52% 命中 → 多信号交叉） |
+| `app/web/api.py` | 报告 Web API（FastAPI：事件列表 / 触发调查 / 报告详情，RCA-040） |
+| `app/web/static/index.html` | 报告台前端（单 HTML：事件列表 + 根因候选 + 证据链 + 时间线 + 修复建议） |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
 
@@ -104,6 +107,9 @@ print('done:', not wf.is_interrupted(tid))
 
 # 8. 真实 DeepSeek（需设 RCA_LLM_API_KEY 环境变量）
 RCA_LLM_API_KEY=sk-xxx .venv/Scripts/python scripts/eval_rcaeval.py --limit 125 --llm   # LLM 模式：Top-3 96.0%
+
+# 9. 报告 Web 页（浏览器打开 http://localhost:8787）
+.venv/Scripts/python.exe -m uvicorn app.web.api:app --port 8787
 ```
 
 ### 环境变量
