@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("trace_id", nargs="?", help="要重建的 traceId（mock 里可用 tr-mock-0001/0002）")
     parser.add_argument("--trace-id", dest="trace_id_opt", help="同位置参数，供习惯 --key 的调用")
     parser.add_argument("--list", action="store_true", help="列出 mock 数据源可用的 traceId")
+    parser.add_argument("--cluster", action="store_true", help="对 trace 日志做聚类降噪，打印异常簇摘要")
     args = parser.parse_args(argv)
 
     if args.list:
@@ -87,6 +88,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"{'慢' if f['is_slow'] else ''}{'错' if f['has_error'] else ''} "
                 f"({f['reason']})"
             )
+
+    if args.cluster:
+        from datetime import timedelta
+
+        from app.pipeline.log_clustering import cluster_logs
+        from app.schema.models import TimeRange
+
+        # 对 trace 日志做聚类降噪（时间窗：trace 最早/最晚 ± 10 秒）
+        trace_logs = [l for l in src.logs if l.trace_id == trace_id]
+        if trace_logs:
+            lo = min(l.timestamp for l in trace_logs) - timedelta(seconds=10)
+            hi = max(l.timestamp for l in trace_logs) + timedelta(seconds=10)
+            result = cluster_logs(src.query_logs(TimeRange(start=lo, end=hi)))
+            print("-" * 60)
+            print("日志聚类降噪：")
+            print(result.to_summary())
 
     return 0
 

@@ -119,6 +119,11 @@ def build_mock_logs() -> list[LogRecord]:
     logs.append(_log(16, "checkout", "host-co-1", "ERROR payment timeout", level="error", exception="TimeoutException"))
     logs.append(_log(17, "gateway", "host-gw-1", "ERROR checkout failed", level="error", exception="RemoteException"))
 
+    # ---- 噪音日志（验证日志聚类降噪：heartbeat/健康检查/info 不进异常簇）----
+    logs.append(_log(5, "checkout", "host-co-1", "heartbeat ok", level="info"))
+    logs.append(_log(6, "payment", "host-pay-1", "health check passed", level="info"))
+    logs.append(_log(7, "gateway", "host-gw-1", "connection pool acquired 10 conns", level="info"))
+
     # ---- 正常 trace tr-mock-0002（基线对比用，payment 正常返回）----
     logs.append(_log(10000, "gateway", "host-gw-1", "receive /order ok", rpc_direction="in", rpc_target="gateway", trace_id="tr-mock-0002"))
     logs.append(_log(10001, "gateway", "host-gw-1", "call checkout ok", rpc_direction="out", rpc_target="checkout", trace_id="tr-mock-0002"))
