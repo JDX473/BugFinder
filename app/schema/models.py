@@ -62,12 +62,19 @@ class EvidenceType(StrEnum):
 
 
 class ScenarioType(StrEnum):
-    """PRD §6.2 步骤 2 的场景枚举。桶 = 可执行的 SOP 剧本。"""
+    """PRD §6.2 步骤 2 的场景枚举。桶 = 可执行的 SOP 剧本。
+
+    - 前五类是技术形态信号驱动的剧本（错误率/延迟/资源/可用性）。
+    - `BUSINESS_LOGIC` 承接"技术信号干净但功能不对"的业务/功能类故障
+      （如"车门打不开"），走业务剧本：业务规则/配置开关/数据状态/业务文档。
+    - `OTHER` 是两边都不沾时的确定性兜底出口。
+    """
 
     LATENCY_SPIKE = "latency_spike"
     ERROR_RATE_SPIKE = "error_rate_spike"
     RESOURCE_SATURATION = "resource_saturation"
     AVAILABILITY_DROP = "availability_drop"
+    BUSINESS_LOGIC = "business_logic"
     OTHER = "other"
 
 
@@ -131,6 +138,28 @@ def confidence_level_for(confidence: float) -> ConfidenceLevel:
     if confidence >= 0.5:
         return ConfidenceLevel.MEDIUM
     return ConfidenceLevel.LOW
+
+
+# ---------------------------------------------------------------- 业务上下文
+
+class BusinessContext(BaseSchema):
+    """业务上下文（场景路由/假设生成/报告的共享输入）。
+
+    从告警文本抽取的"业务是什么、用户看到什么"——与纯技术信号正交的维度。
+    让 Agent 在技术信号干净（如"车门打不开"）时仍能方向正确地调查，
+    也让报告用业务语言写，值班的人看的是业务症状而非裸指标。
+    """
+
+    entity: str = ""  # 业务实体（车/订单/账户/支付单…）
+    symptom: str = ""  # 业务症状（车门打不开/支付失败/订单卡住…）
+    action: str = ""  # 用户动作（开门/下单/发起支付…）
+    confidence: float = 0.0  # 0~1：抽取置信度（规则抽取=1.0，LLM 兜底带分）
+    source: str = "none"  # 抽取来源：rule / llm / none（debug 与审计用）
+
+    @property
+    def is_present(self) -> bool:
+        """是否抽到了业务上下文（entity 与 symptom 至少其一非空）。"""
+        return bool(self.entity or self.symptom)
 
 
 # ---------------------------------------------------------------- 数据信号模型

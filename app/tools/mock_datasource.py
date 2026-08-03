@@ -134,21 +134,57 @@ def build_mock_logs() -> list[LogRecord]:
     logs.append(_log(10007, "checkout", "host-co-1", "ok", trace_id="tr-mock-0002"))
     logs.append(_log(10008, "gateway", "host-gw-1", "ok", trace_id="tr-mock-0002"))
 
+    # ---- 业务故障 trace tr-mock-0003：车门打不开（技术信号干净，业务逻辑拒绝）----
+    # 服务技术健康：无 error 日志、无超时，但业务规则拒绝（行程未开始）
+    logs.append(_log(20000, "car-door", "host-car-1", "receive /door/unlock", rpc_direction="in", rpc_target="car-door", trace_id="tr-mock-0003"))
+    logs.append(_log(20001, "car-door", "host-car-1", "WARN door unlock rejected: trip not started", level="warn", trace_id="tr-mock-0003"))
+    logs.append(_log(20002, "car-door", "host-car-1", "receive /door/unlock", rpc_direction="in", rpc_target="car-door", trace_id="tr-mock-0003"))
+    logs.append(_log(20003, "car-door", "host-car-1", "WARN door unlock rejected: trip not started", level="warn", trace_id="tr-mock-0003"))
+
     return logs
 
 
 def build_mock_metrics() -> dict[str, MetricSeries]:
-    """构造 checkout.error_rate 在故障窗口的异常时序（MAD/3σ 检测用）。"""
+    """构造各场景的指标时序（MAD/3σ 检测用）。
+
+    时间窗约定：**以故障起点 t0（21:00:00Z）为中心**，覆盖 20:30（基线半小时）
+    ~ 21:29（故障半小时），与 trace 日志的故障窗口（21:00 起）对齐——异常起始
+    时间应落在故障 trace 附近，而不是提前一小时。
+
+    - checkout_error_rate：21:00 起飙到 40%（error_rate_spike 场景）
+    - car_door_service_cpu：全程平稳 50%（业务故障窗口技术信号干净）
+    - car_door_error_rate：全程平稳 0.1%（业务故障窗口 error_rate 正常）
+    """
     t0 = datetime.fromisoformat(_BASE.replace("Z", "+00:00"))
-    points = []
-    for i in range(60):  # 60 分钟，前 30 分钟正常 ~1%，后 30 分钟飙到 40%
-        ts = t0 - timedelta(minutes=60 - i)
+    t_start = t0 - timedelta(minutes=30)
+
+    # checkout_error_rate：基线半小时 ~1%，故障半小时飙到 40%（21:00 起）
+    checkout_points = []
+    for i in range(60):
+        ts = t_start + timedelta(minutes=i)
         val = 0.01 if i < 30 else 0.40
-        points.append(MetricPoint(ts=ts, value=val))
+        checkout_points.append(MetricPoint(ts=ts, value=val))
+
+    # 业务故障窗口：CPU 平稳 50%（健康）
+    car_cpu_points = [MetricPoint(ts=t_start + timedelta(minutes=i), value=50.0) for i in range(60)]
+
+    # 业务故障窗口 error_rate：平稳 0.1%（健康）
+    car_err_points = [MetricPoint(ts=t_start + timedelta(minutes=i), value=0.001) for i in range(60)]
+
     return {
         "checkout_error_rate": MetricSeries(
             metric="checkout_error_rate",
             labels={"service": "checkout"},
-            points=points,
-        )
+            points=checkout_points,
+        ),
+        "car_door_service_cpu": MetricSeries(
+            metric="car_door_service_cpu",
+            labels={"service": "car-door"},
+            points=car_cpu_points,
+        ),
+        "car_door_error_rate": MetricSeries(
+            metric="car_door_error_rate",
+            labels={"service": "car-door"},
+            points=car_err_points,
+        ),
     }
