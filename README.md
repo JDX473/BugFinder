@@ -20,9 +20,11 @@
 - [x] MVP 骨架：数据模型、ask_json shim、mock 数据源、traceId 链路重建（CLI 原型）
 - [x] Phase 1 确定性积木：事件归一化、异常检测、日志聚类、场景路由、假设打分、报告生成（端到端"事件 → 报告"已打通）
 - [x] 编排层：LangGraph 7 步状态机（预算路由 + HITL 中断/恢复 + checkpoint + 有界 ReAct harness）
-- [x] 真实数据接入：RCAEval 开放数据集（RE1-OB 125 cases Top-3 95.2% + RE2-SS 90 cases Top-3 91.1%，含真实 k8s 指标/日志）
+- [x] 真实数据接入：RCAEval 开放数据集（RE1-OB 125 cases Top-3 95.2% + RE2-SS 90 cases Top-3 91.1% + RE2-TT 90 cases trace 验证）
 - [x] 真实 LLM 接入：DeepSeek 三注入点接通（场景兜底/假设排序/日志深挖），规则 vs LLM 全量对比（Top-3 96.0%）
-- [ ] 报告 Web 页 / 反馈闭环 / traceId 真实数据验证（下一步）
+- [x] 真实 trace 验证：RE2-TT 慢节点定位 52%（耗时高≠根因 → 多信号交叉验证的必要性）
+- [x] 评估基线固化：Top-1 83-85% vs 业界 42-57%（详见 [evaluation-baseline](docs/implementation/evaluation-baseline.md)）
+- [ ] 报告 Web 页 / 反馈闭环 / traceId 日志重建验证（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
@@ -47,7 +49,8 @@
 | `app/graph/bounded_react.py` | 有界 ReAct harness（max_iters≈4 + 工具受限 + ask_json 强约束 + 证据压制，PRD §6.3） |
 | `app/tools/rcaeval_datasource.py` | RCAEval 开放数据集适配器（RE1 data.csv / RE2 metrics.csv 探测，跳空值，带 ground truth 标注） |
 | `scripts/run_trace_rebuild.py` | CLI 原型：traceId 重建 / 日志聚类 / 场景路由 / 一键产出报告 |
-| `scripts/eval_rcaeval.py` | 真实数据评估（RCAEval RE1-OB，Top-1/Top-3 命中率，PRD §9 雏形） |
+| `scripts/eval_rcaeval.py` | 真实数据评估（RCAEval RE1/RE2 指标，Top-1/Top-3 命中率，PRD §9 雏形） |
+| `scripts/verify_re2_trace.py` | RE2-TT 真实 trace 验证（调用链还原 + 慢节点定位，52% 命中 → 多信号交叉） |
 
 > 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
 
