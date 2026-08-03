@@ -21,7 +21,8 @@
 - [x] Phase 1 确定性积木：事件归一化、异常检测、日志聚类、场景路由、假设打分、报告生成（端到端"事件 → 报告"已打通）
 - [x] 编排层：LangGraph 7 步状态机（预算路由 + HITL 中断/恢复 + checkpoint + 有界 ReAct harness）
 - [x] 真实数据接入：RCAEval 开放数据集（RE1-OB，125 cases）→ 真实指标数据首份评估基准（Top-3 95.2%）
-- [ ] 报告 Web 页 / 真实 LLM 接入 / 评测回归集扩充（下一步）
+- [x] 真实 LLM 接入：DeepSeek 三注入点接通（场景兜底/假设排序/日志深挖），规则 vs LLM 全量对比（Top-3 96.0%）
+- [ ] 报告 Web 页 / RE2/RE3 日志+trace 数据 / 反馈闭环（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
 
@@ -95,8 +96,11 @@ print('done:', not wf.is_interrupted(tid))
 "
 
 # 7. 真实数据评估（RCAEval 开放数据集，需先下载 RE1-OB 到 rca-data/）
-.venv/Scripts/python scripts/eval_rcaeval.py --root E:/QIUZHAO/rca-data/RE1-OB --limit 125   # 全量 125 cases：Top-1 83% / Top-3 95%
+.venv/Scripts/python scripts/eval_rcaeval.py --root E:/QIUZHAO/rca-data/RE1-OB --limit 125   # 纯规则：Top-3 95.2%
 .venv/Scripts/python scripts/eval_rcaeval.py --root E:/QIUZHAO/rca-data/RE1-OB --case adservice_cpu/1 --verbose
+
+# 8. 真实 DeepSeek（需设 RCA_LLM_API_KEY 环境变量）
+RCA_LLM_API_KEY=sk-xxx .venv/Scripts/python scripts/eval_rcaeval.py --limit 125 --llm   # LLM 模式：Top-3 96.0%
 ```
 
 ### 环境变量

@@ -48,19 +48,19 @@ def _hit(candidates, case) -> bool:
     return bool(svcs)
 
 
-def _evaluate_case(src, key: str, verbose: bool = False) -> dict:
-    """评估一个 case，返回判定结果。"""
+def _evaluate_case(src, key: str, verbose: bool = False, llm=None) -> dict:
+    """评估一个 case，返回判定结果。llm 可选注入（对比规则/LLM 效果）。"""
     from app.pipeline.hypothesis_scoring import generate_hypotheses
     from app.pipeline.scenario_router import route_scenario
     from app.schema.models import Evidence, EvidenceType, TimeRange
 
     incident, case, series_list, all_results = _load_case_data(src, key)
 
-    # 场景路由（llm=None 纯规则）
+    # 场景路由（llm 注入时走 LLM 兜底）
     scenario = route_scenario(
         incident_text=incident.alert.title or "",
         anomalies=all_results,
-        llm=None,
+        llm=llm,
     )
 
     # 构造指标证据（供假设打分）
@@ -73,12 +73,12 @@ def _evaluate_case(src, key: str, verbose: bool = False) -> dict:
         payload={"anomalies": abnormal, "tech_signal_clean": not abnormal},
     )
 
-    # 假设打分
+    # 假设打分（llm 注入时走 LLM 排序）
     hyps = generate_hypotheses(
         evidence=[ev],
         scenario=scenario,
         event_start=incident.triggered_at - timedelta(minutes=30),
-        llm=None,
+        llm=llm,
     )
 
     top1_hit = _hit(hyps.candidates[:1], case)
@@ -98,9 +98,11 @@ def _evaluate_case(src, key: str, verbose: bool = False) -> dict:
         "service": case.service,
         "fault": case.fault,
         "scenario": scenario.scenario.value,
+        "scenario_source": scenario.source,
         "top1": top1_hit,
         "top3": top3_hit,
         "n_candidates": len(hyps.candidates),
+        "used_llm": scenario.source == "llm" or hyps.used_llm,
     }
 
 
@@ -110,11 +112,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=20, help="评估 case 数上限")
     parser.add_argument("--case", default=None, help="只评估单个 case（如 productcatalogservice_cpu/1）")
     parser.add_argument("--verbose", action="store_true", help="打印每个 case 详情")
+    parser.add_argument("--llm", action="store_true", help="注入真实 DeepSeek（需 RCA_LLM_API_KEY）")
     args = parser.parse_args(argv)
 
     from app.tools.rcaeval_datasource import RcaEvalMetricSource
 
     src = RcaEvalMetricSource(args.root)
+    llm = None
+    if args.llm:
+        from app.llm.deepseek_llm import create_deepseek_client
+
+        llm = create_deepseek_client()
+        if llm is None:
+            print("[警告] 未配置 RCA_LLM_API_KEY，LLM 评估退化为规则模式")
     if args.case:
         cases = [args.case]
     else:
@@ -123,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     results = []
     for key in cases:
         try:
-            results.append(_evaluate_case(src, key, verbose=args.verbose))
+            results.append(_evaluate_case(src, key, verbose=args.verbose, llm=llm))
         except Exception as e:
             print(f"[跳过] {key}: {e}")
 
@@ -131,12 +141,14 @@ def main(argv: list[str] | None = None) -> int:
     n = len(results)
     top1 = sum(1 for r in results if r["top1"])
     top3 = sum(1 for r in results if r["top3"])
+    llm_used = sum(1 for r in results if r["used_llm"])
     print(f"\n{'='*50}")
-    print(f"评估 {n} 个 case（RE1-OB 真实指标数据）")
+    print(f"评估 {n} 个 case（RE1-OB 真实指标数据，{'LLM' if args.llm else '规则'} 模式）")
     print(f"Top-1 命中: {top1}/{n} = {top1/n*100:.1f}%")
     print(f"Top-3 命中: {top3}/{n} = {top3/n*100:.1f}%")
     print(f"场景分布: {dict(Counter(r['scenario'] for r in results))}")
     print(f"平均候选数: {sum(r['n_candidates'] for r in results)/max(n,1):.1f}")
+    print(f"LLM 实际参与: {llm_used}/{n} 个 case")
     return 0
 
 
