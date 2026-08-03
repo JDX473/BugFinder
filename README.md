@@ -29,7 +29,11 @@
 | `app/tools/base.py` | 数据源适配器协议 + 查询护栏（时间窗/白名单/上限） |
 | `app/tools/mock_datasource.py` | mock 数据源（gateway→checkout→payment 故障场景，离线开发/测试） |
 | `app/tools/trace_reconstruction.py` | traceId 聚合重建调用链（PRD §5.3 关键路径，强/弱重建 + 慢错定位） |
+| `app/pipeline/anomaly_detection.py` | MAD/3σ 指标异常检测（确定性，形态/起始时间/幅度，PRD §5.2） |
+| `app/pipeline/event_normalizer.py` | 事件接收/归一化 + 去重（脏告警→IncidentEvent，RCA-003/004） |
 | `scripts/run_trace_rebuild.py` | CLI 原型：traceId → 粗糙调用序列 |
+
+> 模块实现细节见 [`docs/implementation/`](docs/implementation/)。
 
 ### 快速开始
 
