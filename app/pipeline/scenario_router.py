@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from app.llm.ask_json import ask_json
 from app.llm.protocol import LLMClient
 from app.pipeline.anomaly_detection import MetricAnomaly
-from app.schema.models import BusinessContext, ScenarioType
+from app.schema.models import BusinessContext, ExtractionSource, ScenarioType
 
 # 指标名 → 场景映射。匹配方式：指标名按非字母数字分隔符（./_-）切分后与关键词
 # **精确词**比对（大小写不敏感），避免裸子串误匹配（如 "rt" 命中 "cart_abandonment_rate"）。
@@ -72,7 +72,10 @@ class ScenarioResult:
     scenario: ScenarioType  # 判定的主场景
     confidence: float = 0.0  # 0~1：路由置信度
     basis: str = ""  # 判定依据（指标/业务/llm/other 及摘要），审计与 debug 用
-    source: str = "none"  # 判定来源：metric / business / llm / other
+    # 判定来源：metric / business(业务白名单) / llm / other。用 str（非枚举）——
+    # ScenarioResult 是 dataclass，外部可直接塞字符串（如测试的 "business"），
+    # 不设枚举以保持宽松（评审遗留：dataclass 无 Pydantic 校验层）。
+    source: str = "none"
     business_context: BusinessContext = field(default_factory=BusinessContext)  # 业务上下文
     earliest_anomaly: MetricAnomaly | None = None  # 最早异常指标（主场景依据）
     raw_anomalies: list[MetricAnomaly] = field(default_factory=list)  # 全部异常指标（供假设打分）
@@ -86,6 +89,27 @@ class ScenarioResult:
             f"场景 {self.scenario.value}（来源 {self.source}，置信度 {self.confidence:.2f}，"
             f"依据 {self.basis}）{bc}"
         )
+
+    def to_dict(self) -> dict:
+        """序列化为可 JSON 化的 dict（场景枚举转值，供 Evidence.payload/报告持久化）。
+
+        `MetricAnomaly` 保留对象引用（假设打分直接消费，不走 JSON 往返）。
+        """
+        return {
+            "scenario": self.scenario.value,
+            "confidence": self.confidence,
+            "basis": self.basis,
+            "source": self.source,
+            "business_context": {
+                "entity": self.business_context.entity,
+                "symptom": self.business_context.symptom,
+                "action": self.business_context.action,
+                "confidence": self.business_context.confidence,
+                "source": self.business_context.source.value,
+            },
+            "earliest_anomaly": self.earliest_anomaly.metric if self.earliest_anomaly else None,
+            "raw_anomaly_metrics": [a.metric for a in self.raw_anomalies],
+        }
 
 
 # ---------------------------------------------------------------- 业务白名单
@@ -281,7 +305,8 @@ def route_scenario(
                 basis=f"技术信号干净（资源指标正常），业务白名单命中 '{match[1]}'",
                 source="business",
                 business_context=BusinessContext(
-                    entity=entity, symptom=symptom, action="", confidence=1.0, source="rule"
+                    entity=entity, symptom=symptom, action="", confidence=1.0,
+                    source=ExtractionSource.RULE,
                 ),
                 raw_anomalies=anomalies,
             )
@@ -320,7 +345,7 @@ def route_scenario(
                     business_context=BusinessContext(
                         entity=entity, symptom=symptom, action="",
                         confidence=llm_conf,
-                        source="llm",
+                        source=ExtractionSource.LLM,
                     ),
                     raw_anomalies=anomalies,
                 )
@@ -356,7 +381,7 @@ def _business_from_text(text: str, whitelist: BusinessWhitelist) -> BusinessCont
     if match is None:
         return BusinessContext()
     entity, symptom = match
-    return BusinessContext(entity=entity, symptom=symptom, action="", confidence=1.0, source="rule")
+    return BusinessContext(entity=entity, symptom=symptom, action="", confidence=1.0, source=ExtractionSource.RULE)
 
 
 def _fmt_ts(ts) -> str:
