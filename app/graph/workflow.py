@@ -91,6 +91,7 @@ NODE_NAMES = {
     "trace": "3_trace",
     "logs": "4_logs",
     "metrics": "5_metrics",
+    "agent": "5_agent",
     "hypotheses": "6_hypotheses",
     "report": "7_report",
 }
@@ -231,7 +232,19 @@ class RCAWorkflow:
             {"continue": NODE_NAMES["logs"], "report": NODE_NAMES["report"]},
         )
         g.add_edge(NODE_NAMES["logs"], NODE_NAMES["metrics"])
-        g.add_edge(NODE_NAMES["metrics"], NODE_NAMES["hypotheses"])
+        if self.llm is not None:
+            # 给 LLM 控制权：证据收集后插入 LLM 决策循环（agent 节点）。
+            # LLM 用工具（查日志/查指标）决定"还查不查、何时收敛"，结论压
+            # ev-agent Evidence。确定性主干/预算/HITL/失败兜底全部保留。
+            from app.graph.nodes import make_agent_node
+
+            g.add_node(NODE_NAMES["agent"], make_agent_node(
+                llm=self.llm, log_source=self.log_source, metric_source=self.metric_source,
+            ))
+            g.add_edge(NODE_NAMES["metrics"], NODE_NAMES["agent"])
+            g.add_edge(NODE_NAMES["agent"], NODE_NAMES["hypotheses"])
+        else:
+            g.add_edge(NODE_NAMES["metrics"], NODE_NAMES["hypotheses"])
         g.add_edge(NODE_NAMES["hypotheses"], NODE_NAMES["report"])
         g.add_edge(NODE_NAMES["report"], END)
 
@@ -343,6 +356,7 @@ class RCAWorkflow:
             "3_trace": "链路重建",
             "4_logs": "日志分析",
             "5_metrics": "指标验证",
+            "5_agent": "Agent 决策",
             "6_hypotheses": "假设打分",
             "7_report": "报告生成",
         }

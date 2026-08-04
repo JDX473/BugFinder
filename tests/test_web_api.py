@@ -135,13 +135,13 @@ class TestStreaming:
         assert reports[0]["report"]["root_cause_candidates"]
 
     def test_stream_steps_in_order(self, client):
-        """步骤按 1..7 顺序发出。"""
+        """步骤按升序发出（llm 注入时含 agent 步骤，≥7 步）。"""
         with client.stream("GET", "/api/investigate/stream?free_text=订单很慢") as r:
             body = "".join(r.iter_text())
         events = [json.loads(l[6:]) for l in body.split("\n\n") if l.startswith("data: ")]
         steps = [e["step"] for e in events if e["type"] == "step"]
         assert steps == sorted(steps)
-        assert steps[0] == 1 and steps[-1] == 7
+        assert steps[0] == 1 and steps[-1] >= 7  # llm 注入 → 含 agent 步骤（8 步）
 
     def test_stream_empty_text_422(self, client):
         r = client.get("/api/investigate/stream?free_text=")

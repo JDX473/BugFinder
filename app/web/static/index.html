@@ -138,7 +138,7 @@ async function sendMessage() {
   prog.classList.remove('hidden');
   const stepsEl = document.getElementById('progress-steps');
   stepsEl.innerHTML = '';
-  const steps = ['事件解析','场景判定','链路重建','日志分析','指标验证','假设打分','报告生成'];
+  const steps = ['事件解析','场景判定','链路重建','日志分析','指标验证','Agent 决策','假设打分','报告生成'];
   steps.forEach((s, i) => {
     const el = document.createElement('span');
     el.className = 'step-chip';

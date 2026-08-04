@@ -333,6 +333,105 @@ class _QueryLogsTool:
         return "\n".join(f"[{r.level}] {r.service}: {r.message[:120]}" for r in records[:20])
 
 
+class _QueryMetricTool:
+    """ReAct 可调用的受限指标查询工具：查一个指标并做异常检测。"""
+
+    name = "query_metric"
+    description = "查询一个指标在故障窗口的时序，并做确定性异常检测（返回是否异常/形态/幅度/起始时间）"
+    args_schema = {
+        "type": "object",
+        "properties": {"metric": {"type": "string"}},
+        "required": ["metric"],
+    }
+
+    def __init__(self, metric_source, window: TimeRange):
+        self._metric_source = metric_source
+        self._window = window
+
+    def run(self, args: dict) -> str:
+        # 只取 schema 声明的 metric 参数，忽略 LLM 传入的多余键（start/end 等）
+        metric = str(args.get("metric", "") or "").strip()
+        if not metric:
+            return "缺少指标名"
+        try:
+            series = self._metric_source.query_metric(metric, self._window)
+        except Exception as e:
+            return f"指标查询失败：{e}"
+        if not series.points:
+            return f"指标 {metric} 在窗口内无数据"
+        from app.pipeline.anomaly_detection import detect_anomaly
+
+        result = detect_anomaly(series)
+        return result.to_summary()
+
+
+def make_agent_node(llm=None, log_source=None, metric_source=None):
+    """LLM 决策循环节点（证据收集后，假设生成前）。
+
+    **给 LLM 控制权**：让 LLM 读已收集的证据摘要，决定"还需不需要继续查
+    （查日志 / 查指标）、查什么、何时收敛"，而不是让图固定走完。这是从
+    "固定管线"到"LLM 主导调查"的关键节点。
+
+    约束（保留确定性安全网）：
+      - 有界：max_iters=4，LLM 最多决策 4 次（bounded_react 内部限制）
+      - 工具受限：只能查日志 / 查指标（有界动作空间）
+      - 失败兜底：LLM 失败/坏 JSON/低置信 → 确定性 fallback（conclude=True），
+        不阻塞主线
+      - llm=None 时本节点不接入图（workflow 层判断），确定性路径不受影响
+    """
+    from app.graph.bounded_react import ReActTool, run_bounded_react
+
+    def _evidence_summary(state: dict) -> str:
+        """拼已收集证据的观察前缀（给 LLM 的第一条上下文）。"""
+        lines = []
+        scenario = state.get("scenario")
+        if scenario is not None:
+            lines.append(f"场景判定：{scenario.to_summary()}")
+        for e in state.get("evidence", []):
+            if not e.error:  # 失败占位证据不进观察前缀
+                lines.append(f"[{e.type.value}] {e.summary}")
+        return "\n".join(lines)
+
+    def node(state: dict) -> dict:
+        evs: list[Evidence] = []
+        event_start = state.get("event_start")
+        if event_start is None:
+            event_start = _now_utc()
+        window = _incident_window(event_start)
+
+        tools: list[ReActTool] = []
+        if log_source is not None:
+            tools.append(_QueryLogsTool(log_source, window))
+        if metric_source is not None:
+            tools.append(_QueryMetricTool(metric_source, window))
+
+        def fallback() -> dict:
+            # 确定性兜底：证据已收集，建议进假设生成
+            return {"conclude": True, "reason": "确定性证据已收集，建议进入假设生成"}
+
+        result = run_bounded_react(
+            task=(
+                "你是有界调查代理。已给出现有的确定性证据（场景、指标异常、日志簇、trace）。"
+                "规则：\n"
+                "1. 指标异常已由确定性检测器给出，不要用指标名去查日志（日志里不会有指标名）。\n"
+                "2. 需要补充证据时，才调 query_logs（查故障相关关键词，如异常类型/错误信息）"
+                "或 query_metric（查某个指标的异常）。\n"
+                "3. 证据足够时**立即**给出 final_answer：{\"conclude\": true, \"hypothesis\": "
+                "\"你判断的根因方向\"}。\n"
+                "4. 最多决策 4 次，尽快收敛，不要重复查询同一关键词。"
+            ),
+            tools=tools,
+            llm=llm,
+            fallback=fallback,
+            observation_prefix=_evidence_summary(state),
+        )
+        ev = result.to_evidence("ev-agent", "log", "agent")
+        evs.append(ev)
+        return {"evidence": evs, "step_index": 6}
+
+    return node
+
+
 # ---------------------------------------------------------------- 步骤 5：指标验证
 
 def make_metrics_node():

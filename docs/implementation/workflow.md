@@ -37,6 +37,7 @@ langgraph 节点签名必须是 `(state) -> dict`（或 `(state, config)`），�
 | `3_trace` | trace_reconstruction.rebuild_trace | graph + ev-trace |
 | `4_logs` | log_clustering.cluster_logs | ev-log（+ 可选 ReAct 深挖） |
 | `5_metrics` | anomaly_detection（复用 2 步检测结果） | ev-metric |
+| `5_agent`（仅 llm 注入） | bounded_react + 工具（query_logs/query_metric） | ev-agent（LLM 决策结论） |
 | `6_hypotheses` | hypothesis_scoring.generate_hypotheses | hypotheses |
 | `7_report` | report_generation.generate_report | report |
 
@@ -47,14 +48,22 @@ langgraph 节点签名必须是 `(state) -> dict`（或 `(state, config)`），�
 
 `RCAWorkflow` 封装编译后的 StateGraph：
 
-**图结构**（含预算守卫）：
+**图结构**（含预算守卫 + LLM 决策循环）：
 ```
 START → 1_parse
    ├─ budget_route[over] → 7_report → END     （预算收敛，评审 #1：在首个 LLM 调用点前判断）
    └─ continue → (hitl_gate? →) 2_scenario → 3_trace
         ├─ budget_route[over] → 7_report
-        └─ continue → 4_logs → 5_metrics → 6_hypotheses → 7_report → END
+        └─ continue → 4_logs → 5_metrics
+             ├─ [llm 注入] → 5_agent → 6_hypotheses → 7_report → END
+             └─ [llm=None] → 6_hypotheses → 7_report → END    （确定性路径不变）
 ```
+
+**给 LLM 控制权**（5_agent，本轮新增）：`llm` 注入时，证据收集完（5_metrics）后插入
+**LLM 决策循环节点**——让 LLM 读已收集证据摘要，用工具（`query_logs`/`query_metric`）决定
+"还要不要查、查什么、何时收敛"，结论压 `ev-agent` Evidence 进共享状态。这是从"固定管线"
+到"LLM 主导调查"的关键节点：LLM 不再只是固定点上的兜底，而是真正决定下一步查什么。
+`llm=None` 时该节点不接入图，确定性路径完全不变。
 
 **预算控制**（RCA-011）：`budget_route` 是 `add_conditional_edges` 的**路由函数**（只读返回分支名），
 不是节点——返回 `'continue'`/`'report'`。超预算 → 跳过富集步骤直接出报告（收敛到当前最佳）。
@@ -79,8 +88,37 @@ langgraph 4.1.1 默认 serde 允许所有类型，反序列化警告是未来硬
 - 动作结构化（ask_json 强约束：tool / final_answer 二选一）
 - 结论压制（压成一条 Evidence，LLM 中间思考不进共享状态）
 
-当前接线：`4_logs` 注入 llm 时，若聚类含异常簇，用有界 ReAct 让 LLM 判断"是否深挖该簇"
-（工具：`query_logs`，失败落确定性兜底"不深挖"）。`llm=None` → 纯确定性（不走 ReAct）。
+当前接线：
+- `4_logs` 注入 llm 时，若聚类含异常簇，用有界 ReAct 让 LLM 判断"是否深挖该簇"
+  （工具：`query_logs`，失败落确定性兜底"不深挖"）。
+- `5_agent`（本轮新增，见下）把有界 ReAct 提升为**工作流级 LLM 决策循环**——工具集
+  扩展为 `query_logs` + `query_metric`，LLM 决定整个调查的下一步。
+- `llm=None` → 纯确定性（不走 ReAct）。
+
+### 5. LLM 决策循环（5_agent，本轮新增）
+
+**解决的问题**：此前 LLM 只在 3 个局部兜底点被调用（场景兜底/日志深挖/假设排序），
+它从不决定"下一步查什么"——图是固定线性链，LLM 无控制权，ReAct 在 mock 数据下
+（无 error 级异常簇）实际是死代码。
+
+**实现**（`nodes.py: make_agent_node`）：
+- 证据收集完（5_metrics）后插入，内部跑 `run_bounded_react`（max_iters=4）。
+- **观察前缀** = 已收集证据摘要（场景判定 + 各证据 summary），LLM 基于它决策。
+- **工具集**：`query_logs`（查故障窗口日志，复用）+ `query_metric`（查指标 +
+  detect_anomaly，新增）——工具真实作用于 mock 数据（`checkout_error_rate` 40 倍
+  突增、3 条 error 日志都能查到），ReAct 从死代码变成每次调查都运转的主决策循环。
+- **fallback**：LLM 失败/坏 JSON/低置信 → `{"conclude": True}`（确定性证据已收集，
+  建议进假设生成）——agent 失败不阻塞主线。
+- 结论压 `ev-agent` Evidence 进共享状态（证据压制：LLM 中间思考不进报告）。
+
+**控制权语义**：LLM 决定"还要不要查、查哪个工具、何时收敛"（final_answer），
+图按 LLM 决策走向假设生成。但受三重约束：max_iters=4 封顶、工具受限、失败落确定性
+兜底——"LLM 有控制权，但安全网保留"。
+
+**已知行为观察**（真实 DeepSeek 实测）：DeepSeek 在有界循环里倾向继续调工具而非收敛
+（4 次 query_logs 后落兜底）。这是真实 LLM agent 的固有行为（业界实证：LLM 易在
+低价值查询打转），prompt 已强化引导收敛，但收敛质量是后续调优项，不阻塞架构落地。
+`used_llm=False`（落兜底）时结论仍是 `conclude=True`，确定性主线不受影响。
 
 ## 输出契约
 

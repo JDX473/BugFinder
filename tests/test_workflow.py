@@ -207,6 +207,70 @@ class TestReviewFixes:
         assert out["report"] is not None
 
 
+# ---------------------------------------------------------------- LLM 决策循环
+
+class _FakeReactLLM:
+    """模拟 LLM 决策循环：先调工具，再 final_answer。"""
+
+    def __init__(self, tool_calls: int = 1, conclude: bool = True):
+        self.tool_calls = tool_calls
+        self.conclude = conclude
+        self.calls: list[str] = []
+
+    def complete(self, messages: list[dict[str, str]], temperature: float = 0.0) -> str:
+        user = messages[-1]["content"] if messages else ""
+        # 每次调用后换动作：先 tool，最后 final_answer
+        call_no = len(self.calls)
+        self.calls.append(user)
+        if call_no < self.tool_calls:
+            return '{"tool_name": "query_logs", "args": {"keyword": "ERROR"}, "confidence": 0.9}'
+        conclusion = '{"conclude": true, "hypothesis": "payment 超时导致错误传播"}' if self.conclude else '{"conclude": false, "reason": "需要更多证据"}'
+        return f'{{"final_answer": {conclusion}, "confidence": 0.9}}'
+
+
+class TestAgentDecisionLoop:
+    def test_agent_node_fires_when_llm_injected(self):
+        """llm 注入时，agent 节点触发，ev-agent 进证据。"""
+        llm = _FakeReactLLM(tool_calls=1)
+        wf = RCAWorkflow(llm=llm)
+        out = wf.invoke(_incident())
+        ev_ids = [e.evidence_id for e in out["report"].evidence_list]
+        assert "ev-agent" in ev_ids
+        # LLM 实际调了工具（steps 里有 tool:query_logs）
+        agent_ev = next(e for e in out["report"].evidence_list if e.evidence_id == "ev-agent")
+        steps = agent_ev.payload["steps"]
+        assert any(s["action"].startswith("tool:") for s in steps)
+
+    def test_agent_node_skipped_when_no_llm(self):
+        """llm=None 时 agent 不触发（确定性路径不变）。"""
+        wf = RCAWorkflow()
+        out = wf.invoke(_incident())
+        ev_ids = [e.evidence_id for e in out["report"].evidence_list]
+        assert "ev-agent" not in ev_ids
+
+    def test_agent_failure_falls_back(self):
+        """agent 内 LLM 失败（坏 JSON）→ 确定性兜底，不阻塞报告。"""
+        class ThrowingLLM:
+            def complete(self, messages, temperature=0.0):
+                raise TimeoutError("模拟超时")
+
+        wf = RCAWorkflow(llm=ThrowingLLM())
+        out = wf.invoke(_incident())
+        assert out["report"] is not None
+        # ev-agent 是兜底结论（conclude=True）
+        agent_ev = next(e for e in out["report"].evidence_list if e.evidence_id == "ev-agent")
+        assert agent_ev.payload["conclusion"].get("conclude") is True
+
+    def test_agent_evidence_has_conclusion(self):
+        """agent 结论（final_answer）写进 ev-agent 的 conclusion。"""
+        llm = _FakeReactLLM(tool_calls=0, conclude=True)
+        wf = RCAWorkflow(llm=llm)
+        out = wf.invoke(_incident())
+        agent_ev = next(e for e in out["report"].evidence_list if e.evidence_id == "ev-agent")
+        assert agent_ev.payload["conclusion"]["conclude"] is True
+        assert "payment" in agent_ev.payload["conclusion"]["hypothesis"]
+
+
 # ---------------------------------------------------------------- 预算
 
 class TestBudget:

@@ -26,6 +26,7 @@
 - [x] 评估基线固化：Top-1 83-85% vs 业界 42-57%（详见 [evaluation-baseline](docs/implementation/evaluation-baseline.md)）
 - [x] 报告 Web 页：FastAPI + 单 HTML 报告台（事件列表 / 触发调查 / 报告详情，RCA-040）
 - [x] Agent 激活：Web 默认注入 DeepSeek（场景兜底/假设排序/ReAct 三注入点）+ 流式调查（SSE 逐步进度）
+- [x] LLM 控制权：证据收集后插 LLM 决策循环（5_agent 节点，工具查日志/指标决定下一步，确定性兜底保留）
 - [ ] 反馈闭环（采信/纠偏落库）/ 告警 webhook 接入（下一步）
 
 ## 开发状态（MVP 骨架，Phase 0 → Phase 1 起步）
