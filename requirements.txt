@@ -1,0 +1,12 @@
+# RCAgent 复现 — Python 依赖
+# LLM API 客户端
+openai>=1.30.0
+# 配置加载
+PyYAML>=6.0
+# 模糊去重/相似度
+rapidfuzz>=3.0
+# Louvain 社区检测(日志分区, M3 使用)
+python-louvain>=0.16
+networkx>=3.0
+# 测试
+pytest>=8.0

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 运行产物与生成数据
+runs/
+# 合成 demo 数据,可用 python -m rcagent.env.local --generate 重建
+data/demo_jobs/
+nltk_data/
+
+# Obsidian 本地状态(仅推送文档本身)
+obsidian/.obsidian/
+
+# 密钥/环境
+.env
+*.key
+*.pem
+
+# 系统
+.DS_Store
+Thumbs.db

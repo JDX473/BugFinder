@@ -1,0 +1,76 @@
+# RCAgent 复现 — 全局配置
+# 以论文 §IV-A/§IV-C 配置为默认值;★项为用户提供后更新
+
+llm:
+  provider: deepseek            # deepseek | openai | mock(mock 无需 API key)
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY # 从环境变量读取,勿写入本文件
+  timeout: 120
+  max_retries: 3
+  # 成本计量
+  price_per_1m_input: 1.0       # 用于预算估算,按供应商实际价格更新
+  price_per_1m_output: 4.0
+
+embedding:
+  provider: openai_compat        # openai_compat | mock;★用户提供: qwen3.7-text-embedding
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen3.7-text-embedding
+  dim: 1024
+  api_key_env: EMBEDDING_API_KEY
+
+decoding:
+  default: greedy               # greedy | sampling
+  # 自适应惩罚(论文 §IV-A): 生成超阈值 token 后重启并 +0.5 penalty
+  penalty_threshold_tokens: 4096
+  penalty_step: 0.5
+  max_penalty_iterations: 3
+  sampling:                     # SC 采样配置(论文: temperature 0.9, top_p 0.6)
+    temperature: 0.9
+    top_p: 0.6
+
+agent:
+  variant: full                 # full | react | no_experts | no_jsonregen | no_obsk | no_obs_head
+  max_steps: 15                 # Pass Rate 定义: 15 步内 finalize
+  obs_head_chars: 4000          # OBSK: 观察 head 字符数
+  jsonregen_retries: 3          # JsonRegen 重试上限
+  finalize_required_fields: [root_cause, solution, evidence, responsibility]
+  # 错误处理(论文 §III-C2)
+  error_handling:
+    duplicate_call: true
+    trivial_input_min_chars: 5  # expert 输入短于此视为 trivial
+    early_finalize_min_tools: 1 # finalize 前至少调用过的信息收集工具数
+
+tools:
+  dedup_ratio: 0.95             # 模糊去重: 相似度高于此值视为重复
+  max_obs_chars: 200000         # 工具返回超长时的硬上限(对齐论文图1的裁剪)
+
+log_agent:                      # 论文 Algorithm 1 参数
+  window: 200                   # 分区配对窗口 j-i ∈ (0, 200]
+  top_k: 3                      # ICP 检索示例数
+  max_chunks: 30                # 分析块数上限(按可疑度优先,超限裁掉纯正常区域)
+  min_chunk_lines: 30           # 更小的 chunk 并入相邻块(分区碎片合并)
+  jsonregen_retries: 2
+  temperature: 0.0
+  concurrency: 4                # 分块分析并发数
+
+code_agent:                     # 代码分析专家(论文 §III-B2 图4;仓库即插件)
+  max_files: 20                 # 递归分析文件数上限(防无限递归)
+  jsonregen_retries: 2
+  temperature: 0.0
+  repo_name: advisor service    # ★ 目标服务适配时填写
+  language: Java                # prompt 措辞用(分析逻辑与语言无关)
+  language_short: java          # 代码块标记
+
+sc:                             # Self-Consistency(论文 §III-D)
+  method: none                  # none | tsc | sc(步进)
+  samples: 10                   # 采样数 K
+  aggregate: llm                # llm | embedding
+  temperature: 0.9              # 采样解码(对齐论文 Vicuna 默认配置)
+  top_p: 0.6
+
+trajectory:
+  dir: ./runs
+  save_prompt_text: true        # 记录每步送入 LLM 的确切 prompt(排错用,体积大)
+
+seed: 42
