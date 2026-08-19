@@ -5,7 +5,39 @@ Large Language Models](https://arxiv.org/abs/2310.16340)(arXiv:2310.16340)的复
 
 详细需求见 [PRD_RCAgent_复现开发文档.md](PRD_RCAgent_复现开发文档.md)。
 
-## 当前进度(M1 框架骨架,已完成)
+## 系统架构:决策循环
+
+```mermaid
+flowchart TB
+    START["异常任务<br/>job_id / anomaly / detect_time"] --> MEM
+
+    subgraph MEM["Controller Memory<br/>(system prompt + 完整历史)"]
+        GEN["LLM 生成<br/>Thought + Function JSON"]
+    end
+
+    GEN --> J["JsonRegen 解析<br/>(Algorithm 2)"]
+    J -->|解析失败| ERR1["错误反馈"]
+    J --> CHK{"工具校验<br/>+ 错误检测"}
+    CHK -->|失败| ERR2["错误反馈 + 建议"]
+    CHK -->|通过| EXE["执行工具<br/>(快照键经 OBSK 解析)"]
+
+    EXE -->|信息收集工具| OBS["观察:<br/>head + [snapshot: key]"]
+    EXE -->|专家工具| EXP["专家分析<br/>(Algorithm 1 / 图4)"]
+    EXP --> OBS
+    OBS -->|注入消息历史| GEN
+
+    ERR1 --> MEM
+    ERR2 --> MEM
+    EXE -->|finalize| FIN{"四项结果校验"}
+    FIN -->|缺字段| ERR3["错误反馈"] --> MEM
+    FIN -->|通过| OUT["RCA 结果"]
+    OUT --> TSC["TSC 聚合(可选)<br/>重放采样 + LLM/embedding 聚合"]
+```
+
+四个回路:观察推进调查(正常)、解析失败重试(JsonRegen)、动作修正(错误处理)、
+finalize 出口——所有反馈都回到 Controller Memory,循环不因错误终止。
+
+## 当前进度(M1~M7 框架,已完成)
 
 - [x] Controller Agent thought-action-observation 循环(`rcagent/core/agent.py`)
 - [x] Prompt 三件套:框架规则 / 任务要求 / 工具文档(`rcagent/core/prompts.py` + `config/prompts/`)
