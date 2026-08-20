@@ -407,10 +407,19 @@ async function viewSnapshot(key) {
 function closeModal() { $("modal").style.display = "none"; }
 
 /* ---------------- 任务控制 ---------------- */
+/* 描述关键词 → 实例匹配: 保证检测时刻与故障时间窗一致(否则时间截止约束会屏蔽故障) */
+function matchJobId(env, anomaly) {
+  if (env !== "im") return "demo_es_conn_timeout";
+  const a = anomaly.toLowerCase();
+  if (/mq|broker|消息上抛|send failed|rocket/.test(a)) return "im_mq_broker_down";
+  if (/redis|outbox|zpopmin|扫描|发件箱/.test(a)) return "im_outbox_redis_fail";
+  if (/channel|帧|连接|frame|too long/.test(a)) return "im_connect_channel_error";
+  return "im_outbox_redis_fail";
+}
 async function startRun() {
   const env = $("env").value;
-  const jobId = $("job").value.trim() || (env === "im" ? "im_outbox_redis_fail" : "demo_es_conn_timeout");
   const anomaly = $("anomaly").value.trim();
+  const jobId = $("job").value.trim() || matchJobId(env, anomaly);
   const body = { job_id: jobId, variant: $("variant").value,
                  decode: "greedy", mock: $("mock").checked, env };
   if (anomaly) body.anomaly = anomaly;
