@@ -11,6 +11,7 @@ class StartRunRequest(BaseModel):
     variant: str = Field("full", description="full|react|no_experts|no_jsonregen|no_obsk|no_obs_head")
     decode: str = Field("greedy", description="greedy|sampling")
     mock: bool = Field(True, description="mock 模式无需 API key")
+    env: str = Field("demo", description="demo(合成)| im(QuantumLink IM 真实服务)")
 
 
 class RunSummary(BaseModel):

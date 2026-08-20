@@ -1,0 +1,15 @@
+{
+ "job_id": "im_connect_channel_error",
+ "anomaly": "im-connect 层出现 channel error: 客户端连接被拒绝/断开(TooLongFrameException)",
+ "detect_time": "2026-08-20T13:13:30+08:00",
+ "ground_truth": {
+  "root_cause": "客户端发送非法协议帧(长度字段异常 1634166075 超过 LengthFieldBasedFrameDecoder 上限 8388622),Netty 解码器抛 TooLongFrameException 并断开连接,im-connect 记录 channel error",
+  "solution": "修复客户端协议实现(帧头长度字段正确编码);服务端可对异常帧做容错处理",
+  "evidence": "io.netty.handler.codec.TooLongFrameException: Adjusted frame length exceeds 8388622: 1634166075; MessageHandler - channel error",
+  "responsibility": "user"
+ },
+ "data_sources": {
+  "chat_log": "E:\\QIUZHAO\\IM\\tmp-chat.log",
+  "connect_log": "E:\\QIUZHAO\\IM\\tmp-connect-19001.log"
+ }
+}

@@ -40,12 +40,18 @@ def create_app(cfg=None, runs_dir: str = "runs") -> FastAPI:
     # -- 任务提交与查询 -----------------------------------------------------
 
     @app.get("/api/jobs")
-    def list_jobs():
-        """demo job 列表(扫描 data/demo_jobs/*/job.json)。"""
-        from ..env.local import DATA_DIR
+    def list_jobs(env: str = "demo"):
+        """job 列表: demo(合成)| im(QuantumLink IM 真实案例)。"""
+        if env == "im":
+            from ..env.im_env import IM_JOBS_DIR
 
+            data_dir = IM_JOBS_DIR
+        else:
+            from ..env.local import DATA_DIR
+
+            data_dir = DATA_DIR
         jobs = []
-        for p in sorted(DATA_DIR.glob("*/job.json")):
+        for p in sorted(data_dir.glob("*/job.json")):
             try:
                 meta = json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
@@ -60,7 +66,7 @@ def create_app(cfg=None, runs_dir: str = "runs") -> FastAPI:
         try:
             run_id = manager.start(req.job_id, variant=req.variant,
                                    decode=req.decode, mock=req.mock,
-                                   anomaly=req.anomaly)
+                                   anomaly=req.anomaly, env=req.env)
         except RunBusy as e:
             raise HTTPException(status_code=409, detail=str(e)) from None
         return {"run_id": run_id, "status": "running"}

@@ -102,9 +102,13 @@ class IMEnvironment:
         lines.reverse()
         return "\n".join(lines)
 
-    def _error_summary(self, path: Path, before: str) -> str:
-        """ERROR 类型分布摘要(按 logger 名聚合 + 时间范围)。"""
-        text = self._tail_filtered(path, before, "ERROR", max_lines=20000)
+    def _error_summary(self, path: Path, before: str, max_lines: int = 500) -> str:
+        """ERROR 类型分布摘要(按 logger 名聚合 + 时间范围)。
+
+        只统计检测时刻前最近 max_lines 条 ERROR(默认 500,约最后 40 分钟)
+        ——避免 36 小时的历史故障噪音把模型带偏到无关故障。
+        """
+        text = self._tail_filtered(path, before, "ERROR", max_lines=max_lines)
         if not text:
             return "(no ERROR lines before detection time)"
         counts: dict[str, int] = {}
@@ -119,7 +123,7 @@ class IMEnvironment:
             if m:
                 counts[m.group(1)] = counts.get(m.group(1), 0) + 1
         top = sorted(counts.items(), key=lambda kv: -kv[1])[:10]
-        summary = f"ERROR window: {first_ts} ~ {last_ts}, total {sum(counts.values())} lines\n"
+        summary = f"ERROR window: {first_ts} ~ {last_ts}, total {sum(counts.values())} lines (last {max_lines} ERRORs)\n"
         summary += "\n".join(f"  {name}: {n}" for name, n in top)
         return summary
 

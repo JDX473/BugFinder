@@ -32,6 +32,10 @@ four items: root_cause, solution, evidence, responsibility.
 - Collect data with the provided tools (chat_log / connect_log / error_summary
   / outbox_error / log_agent / code_agent) before concluding. Only lines
   before the detection time are available — do not assume future information.
+- **Fault-layer matching**: if the anomaly description mentions im-connect /
+  long-connection / channel / client connection, query `connect_log` first;
+  if it mentions im-chat / business / outbox / Redis, query `chat_log` /
+  `error_summary` first. Prefer the log of the layer the anomaly belongs to.
 - Base every claim on observed evidence; quote log lines verbatim.
 - If code understanding is needed (e.g. how OutboxService works), use
   code_agent with a class name (e.g. "OutboxService") — it reads the real
@@ -40,6 +44,11 @@ four items: root_cause, solution, evidence, responsibility.
   (typically within a few tool calls), call finalize. The hard limit is 15
   steps; reaching it without finalize counts as failure. Do not keep
   exploring after the evidence is conclusive.
+- **Stop condition**: if a clear exception with a stack trace already reveals
+  the failing component and mechanism (e.g. TooLongFrameException +
+  LengthFieldBasedFrameDecoder, or RedisSystemException + OutboxService),
+  that IS sufficient evidence — call finalize. Extra verification of details
+  (frame format constants, handshake flows) is unnecessary.
 - Output all four items in the `finalize` call; do not omit any field.
 
 ## Responsibility determination rules

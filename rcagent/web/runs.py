@@ -39,6 +39,7 @@ class RunState:
     variant: str
     decode: str
     anomaly: str | None = None
+    env: str = "demo"          # demo(合成) | im(QuantumLink IM)
     status: str = "running"
     events: list[dict] = field(default_factory=list)
     seq: int = 0
@@ -65,7 +66,7 @@ class RunManager:
 
     def start(self, job_id: str, *, variant: str = "full",
               decode: str = "greedy", mock: bool = True,
-              anomaly: str | None = None) -> str:
+              anomaly: str | None = None, env: str = "demo") -> str:
         """启动一个 run;已有活跃 run 时抛 RunBusy。"""
         with self._active_lock:
             if self._active is not None:
@@ -73,7 +74,7 @@ class RunManager:
             state = RunState(
                 run_id=f"live_{job_id}_{int(time.time() * 1000)}",
                 job_id=job_id, mock=mock, variant=variant, decode=decode,
-                anomaly=anomaly,
+                anomaly=anomaly, env=env,
             )
             self._active = state
         t = threading.Thread(target=self._worker, args=(state,), daemon=True)
@@ -204,13 +205,32 @@ class RunManager:
 
         mock 分支强制 embedding.provider="mock"(不依赖 EMBEDDING_API_KEY,
         否则无 key 时构造 Embedder 即抛 ValueError)。
+        env_name: demo(合成)| im(QuantumLink IM 真实服务)。
         """
         from ..core.agent import JobDesc, RCAgent
-        from ..env.local import LocalEnvironment, load_job
-        from ..experts.knowledge import build_demo_kb
+        from ..experts.knowledge import build_demo_kb, build_im_kb
         from ..llm.embedding import Embedder
 
-        meta = load_job(state.job_id)
+        if getattr(state, "env", "demo") == "im":
+            from ..env.im_env import IMEnvironment, IM_JOBS_DIR
+            from ..env.local import load_job
+
+            env_cls = IMEnvironment
+            data_dir = IM_JOBS_DIR
+            kb_fn = build_im_kb
+            task_requirements = (
+                Path(__file__).resolve().parent.parent.parent
+                / "config" / "prompts" / "task_requirements_im.txt"
+            ).read_text(encoding="utf-8")
+        else:
+            from ..env.local import DATA_DIR, LocalEnvironment, load_job
+
+            env_cls = LocalEnvironment
+            data_dir = DATA_DIR
+            kb_fn = build_demo_kb
+            task_requirements = None
+
+        meta = load_job(state.job_id, data_dir)
         job = JobDesc(
             job_id=meta["job_id"],
             anomaly=(state.anomaly or meta["anomaly"]).strip() or meta["anomaly"],
@@ -238,8 +258,9 @@ class RunManager:
             llm = LLMClient(self.cfg.llm)
             embedder = Embedder(self.cfg.embedding)
 
-        env = LocalEnvironment(llm=llm, embedder=embedder, kb=build_demo_kb(embedder))
-        agent = RCAgent.build(self.cfg, llm, env, variant=state.variant, events=events)
+        env = env_cls(llm=llm, embedder=embedder, kb=kb_fn(embedder))
+        agent = RCAgent.build(self.cfg, llm, env, variant=state.variant,
+                              events=events, task_requirements=task_requirements)
         traj = agent.run(job, decode_mode=state.decode)
         return traj, agent.store
 

@@ -87,6 +87,10 @@ select#history { width: 100%; margin-bottom: 8px; }
 </head>
 <body>
 <header>
+  <label>环境 <select id="env" onchange="loadJobs()">
+    <option value="demo">demo(合成)</option>
+    <option value="im">im(真实服务)</option>
+  </select></label>
   <label>任务 <select id="job"></select></label>
   <label>异常描述 <input type="text" id="anomaly" size="30" placeholder="自定义描述(选任务时留空用默认)"></label>
   <label><input type="checkbox" id="mock" checked> mock(无需 key)</label>
@@ -325,7 +329,7 @@ function closeModal() { $("modal").style.display = "none"; }
 async function startRun() {
   const anomaly = $("anomaly").value.trim();
   const body = { job_id: $("job").value, variant: $("variant").value,
-                 decode: "greedy", mock: $("mock").checked };
+                 decode: "greedy", mock: $("mock").checked, env: $("env").value };
   if (anomaly) body.anomaly = anomaly;
   const r = await fetch("/api/runs", { method: "POST", headers: {"Content-Type": "application/json"},
                                        body: JSON.stringify(body) });
@@ -368,11 +372,15 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+async function loadJobs() {
+  const env = $("env").value;
+  const jobs = await (await fetch(`/api/jobs?env=${env}`)).json();
+  $("job").innerHTML = jobs.map(j => `<option value="${j.job_id}">${j.job_id} · ${j.anomaly.slice(0, 40)}</option>`).join("");
+}
 /* ---------------- 初始化 ---------------- */
 (async function init() {
   buildSvg();
-  const jobs = await (await fetch("/api/jobs")).json();
-  $("job").innerHTML = jobs.map(j => `<option value="${j.job_id}">${j.job_id} · ${j.anomaly.slice(0, 40)}</option>`).join("");
+  await loadJobs();
   $("start").onclick = startRun;
   $("cancel").onclick = cancelRun;
   loadHistory();
