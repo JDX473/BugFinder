@@ -53,6 +53,7 @@ class CodeExpertAgent:
         self.llm = llm
         self.repo_dir = Path(repo_dir)
         self.cfg = cfg.get("code_agent") if cfg is not None else None
+        self._missing: set[str] = set()  # 已确认不存在的类名(防模型重复猜测)
 
     def _opt(self, key: str, default):
         return self.cfg.get(key, default) if self.cfg else default
@@ -61,7 +62,27 @@ class CodeExpertAgent:
 
     def run(self, class_name: str) -> str:
         """递归分析;返回给 controller 的 observation 文本。"""
-        queue = [class_name.strip()]
+        class_name = class_name.strip()
+        if not class_name:
+            return ("{interpretation: no class name provided, evidence: []}")
+        if self._resolve_file(class_name) is None:
+            # 明确否定 + 禁止猜测: 弱反馈会被模型解读为"再猜别的名字"
+            if class_name in self._missing:
+                return (
+                    f"interpretation: class '{class_name}' was already checked and "
+                    "does not exist in this codebase. Stop guessing class names; "
+                    "analyze the evidence you already collected or call finalize. "
+                    "evidence: []"
+                )
+            self._missing.add(class_name)
+            return (
+                f"interpretation: class '{class_name}' does not exist in the "
+                f"{self._opt('repo_name', 'service')} codebase. Class names must be "
+                "referenced from previously observed code files or advisor records; "
+                "do NOT guess class names. evidence: []"
+            )
+
+        queue = [class_name]
         visited: set[Path] = set()
         analyses: list[str] = []
         max_files = self._opt("max_files", 20)
