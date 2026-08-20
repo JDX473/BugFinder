@@ -221,9 +221,17 @@ class RCAgent:
                 return None
             events.emit(EVENT_LLM_GENERATING, step=step)
             t0 = time.monotonic()
-            gen = generate(self.llm, cfg, messages, mode=decode_mode)
+            # 流式生成: 增量文本经 llm_token 事件实时推送(Web 可视化防"卡住"错觉)
+            streamed = {"text": []}
+
+            def _on_delta(delta: str) -> None:
+                streamed["text"].append(delta)
+                events.emit("llm_token", step=step, delta=delta)
+
+            gen = generate(self.llm, cfg, messages, mode=decode_mode,
+                           stream_cb=_on_delta)
             latency_ms = int((time.monotonic() - t0) * 1000)
-            text = gen.text
+            text = gen.text or "".join(streamed["text"])
             events.emit(EVENT_LLM_GENERATED, step=step, text=text, model=gen.model,
                         tokens={"prompt": gen.prompt_tokens, "completion": gen.completion_tokens},
                         penalty_escalations=gen.extra.get("penalty_escalations", 0),

@@ -37,19 +37,19 @@ main { display: grid; grid-template-columns: 320px 1fr 380px; gap: 12px; padding
 
 /* ---- Loop 节点图 ---- */
 #loop-svg { width: 100%; }
-.node rect { rx: 10; filter: url(#shadow); }
-.node text { fill: var(--text); font-size: 12px; font-weight: 600; }
-.node .icon { font-size: 20px; }
-.node .st { font-size: 10px; fill: var(--muted); font-weight: 400; }
+.node rect { rx: 9; filter: url(#shadow); }
+.node text { fill: var(--text); font-size: 11px; font-weight: 600; }
+.node .icon { font-size: 17px; }
+.node .st { font-size: 9px; fill: var(--muted); font-weight: 400; }
+.node .tick { font-size: 12px; fill: var(--green); font-weight: 700; }
 .edge { stroke: #4a5868; stroke-width: 2; fill: none; marker-end: url(#arrow); }
 .edge.feedback { stroke: var(--amber); stroke-dasharray: 7 4; marker-end: url(#arrow-amber); }
 .edge-label { fill: var(--amber); font-size: 10px; font-weight: 600; }
 .node.pending rect { fill: #1b2330; stroke: #2f3b4c; }
-.node.active rect { fill: #12304f; stroke: var(--blue); stroke-width: 2.5; filter: url(#glow); animation: pulse 1.4s infinite; }
-.node.success rect { fill: #0e2a20; stroke: var(--green); }
+.node.active rect { fill: #16202e; stroke: var(--blue); stroke-width: 3; filter: url(#glow); animation: pulse 1.2s infinite; }
+.node.done rect { fill: #1b2330; stroke: #3a4a5c; }
 .node.failed rect { fill: #33161b; stroke: var(--red); }
-.node.success .icon { }
-@keyframes pulse { 50% { stroke-opacity: .35; } }
+@keyframes pulse { 50% { stroke-opacity: .3; } }
 
 /* ---- 步骤流 ---- */
 #steps .step-card { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; padding: 10px; background: #141a22; }
@@ -79,10 +79,17 @@ select#history { width: 100%; margin-bottom: 8px; }
 .btn-sm { font-size: 12px; padding: 3px 8px; }
 
 /* modal */
-#modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10; }
-#modal .box { position: absolute; inset: 8% 15%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; }
-#modal .box header { border-bottom: 1px solid var(--border); }
+#modal, #cases-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10; }
+#modal .box, #cases-modal .box { position: absolute; inset: 8% 15%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; }
+#cases-modal .box { inset: 5% 10%; }
+#modal .box header, #cases-modal .box header { border-bottom: 1px solid var(--border); }
 #modal pre { flex: 1; overflow: auto; padding: 12px; font-size: 12px; white-space: pre-wrap; }
+#cases-content table { width: 100%; border-collapse: collapse; }
+#cases-content th, #cases-content td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+#cases-content th { color: var(--muted); background: #141a22; }
+#cases-content .kb { margin-top: 14px; }
+#cases-content .kb pre { background: #10151c; border-radius: 6px; padding: 8px; white-space: pre-wrap; margin: 4px 0; }
+.stream-card { border: 1px solid var(--blue); box-shadow: 0 0 8px rgba(77,163,255,.25); }
 </style>
 </head>
 <body>
@@ -104,6 +111,7 @@ select#history { width: 100%; margin-bottom: 8px; }
   </select></label>
   <button id="start" class="primary">▶ 提交任务</button>
   <button id="cancel" disabled>✕ 取消</button>
+  <button id="cases-btn" onclick="openCases()">📚 案例库</button>
   <div id="badge"></div>
 </header>
 <main>
@@ -129,22 +137,30 @@ select#history { width: 100%; margin-bottom: 8px; }
   </div>
 </main>
 <div id="modal"><div class="box"><header><b id="modal-title" style="flex:1">快照全文</b><button onclick="closeModal()">关闭</button></header><pre id="modal-content"></pre></div></div>
+<div id="cases-modal"><div class="box">
+  <header><b style="flex:1">案例库与知识库(RAG 内容)</b><button onclick="document.getElementById('cases-modal').style.display='none'">关闭</button></header>
+  <div class="body" id="cases-content" style="overflow:auto;padding:12px;font-size:12px"></div>
+</div></div>
 
 <script>
 const $ = id => document.getElementById(id);
 let es = null, curRun = null, stepBuf = {}, finalizeShown = false;
 
-/* ---------------- Loop 节点图 ---------------- */
+/* ---------------- Loop 节点图(13 节点,细化) ---------------- */
 const NODES = [
-  { id: "task",      y: 24,  icon: "📥", label: "任务输入", sub: "job_id / anomaly" },
-  { id: "llm",       y: 106, icon: "🧠", label: "LLM 生成", sub: "Thought + Function JSON" },
-  { id: "parse",     y: 188, icon: "🔧", label: "JsonRegen 解析", sub: "Algorithm 2" },
-  { id: "validate",  y: 270, icon: "✅", label: "工具校验", sub: "参数合法性" },
-  { id: "errdetect", y: 352, icon: "⚠️", label: "错误检测", sub: "§III-C2 三类错误" },
-  { id: "tool",      y: 434, icon: "⚙️", label: "执行工具", sub: "信息收集 / 快照解析" },
-  { id: "expert",    y: 434, icon: "🔬", label: "专家分析", sub: "log / code agent", branch: true },
-  { id: "observe",   y: 516, icon: "👁️", label: "观察注入", sub: "head + [snapshot: key]" },
-  { id: "finalize",  y: 598, icon: "🏁", label: "finalize 出口", sub: "四项 RCA 结果" },
+  { id: "task",    y: 18,  icon: "📥", label: "任务输入", sub: "job / anomaly" },
+  { id: "think",   y: 84,  icon: "🧠", label: "LLM 思考生成", sub: "Thought + JSON" },
+  { id: "extract", y: 150, icon: "🔍", label: "JSON 提取", sub: "FINDJSON" },
+  { id: "repair",  y: 216, icon: "🛠️", label: "JSON 修复", sub: "转义 / YAML 重试" },
+  { id: "toolchk", y: 282, icon: "🧩", label: "工具校验", sub: "工具是否存在" },
+  { id: "paramchk",y: 348, icon: "📋", label: "参数校验", sub: "必填 / 合法" },
+  { id: "errdet",  y: 414, icon: "⚠️", label: "错误检测", sub: "重复 / trivial / 过早" },
+  { id: "snap",    y: 480, icon: "🔑", label: "快照解析", sub: "OBSK resolve" },
+  { id: "tool",    y: 546, icon: "⚙️", label: "工具执行", sub: "handler + 去重" },
+  { id: "wrap",    y: 612, icon: "📦", label: "观察包装", sub: "head + snapshot" },
+  { id: "inject",  y: 678, icon: "↩️", label: "观察注入", sub: "回 Memory" },
+  { id: "final",   y: 744, icon: "🏁", label: "finalize 出口", sub: "四项 RCA 结果" },
+  { id: "expert",  y: 546, icon: "🔬", label: "专家分析", sub: "log / code", branch: true },
 ];
 const NS = "http://www.w3.org/2000/svg";
 function el(name, attrs, parent) {
@@ -156,8 +172,7 @@ function el(name, attrs, parent) {
 function buildSvg() {
   const svg = $("loop-svg");
   svg.innerHTML = "";
-  svg.setAttribute("viewBox", "0 0 320 690");
-  // defs: 箭头 / 阴影 / 发光
+  svg.setAttribute("viewBox", "0 0 320 800");
   const defs = el("defs", {}, svg);
   const marker = el("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5,
     markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
@@ -170,40 +185,50 @@ function buildSvg() {
   el("filter", { id: "glow", x: "-40%", y: "-40%", width: "180%", height: "180%" }, defs)
     .innerHTML = '<feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>';
 
-  // 主链节点
-  const X = 20, W = 210, H = 56, CX = X + W / 2;
+  const X = 16, W = 196, H = 46, CX = X + W / 2;
   for (const n of NODES) {
     if (n.branch) continue;
     const g = el("g", { class: "node pending", id: "node-" + n.id }, svg);
     el("rect", { x: X, y: n.y, width: W, height: H }, g);
-    el("text", { class: "icon", x: X + 22, y: n.y + 38 }, g).textContent = n.icon;
-    el("text", { x: X + 44, y: n.y + 24 }, g).textContent = n.label;
-    const st = el("text", { class: "st", x: X + 44, y: n.y + 42 }, g);
-    st.textContent = n.sub;
+    el("text", { class: "icon", x: X + 20, y: n.y + 31 }, g).textContent = n.icon;
+    el("text", { x: X + 40, y: n.y + 20 }, g).textContent = n.label;
+    el("text", { class: "st", x: X + 40, y: n.y + 36 }, g).textContent = n.sub;
   }
   // 专家分支节点(右侧)
   const exp = NODES.find(n => n.branch);
   {
     const g = el("g", { class: "node pending", id: "node-expert" }, svg);
     el("rect", { x: 246, y: exp.y, width: 66, height: H }, g);
-    el("text", { class: "icon", x: 279, y: exp.y + 30 }, g).textContent = exp.icon;
-    el("text", { x: 279, y: exp.y + 48, "font-size": "10" }, g).textContent = exp.label;
+    el("text", { class: "icon", x: 279, y: exp.y + 26 }, g).textContent = exp.icon;
+    el("text", { x: 279, y: exp.y + 40, "font-size": "9" }, g).textContent = exp.label;
   }
-  // 主链连线(底部 → 下一个顶部)
+  // 主链连线
   for (let i = 0; i < NODES.length; i++) {
     const n = NODES[i], next = NODES[i + 1];
     if (n.branch || !next || next.branch) continue;
     el("path", { class: "edge", d: `M${CX} ${n.y + H} L${CX} ${next.y}` }, svg);
   }
-  // 专家分支连线(tool → expert)
+  // 专家分支连线
   el("path", { class: "edge", id: "expert-edge",
     d: `M${X + W} ${exp.y + H / 2} L246 ${exp.y + H / 2}` }, svg);
-  // 回环: 观察注入 → LLM 生成(右侧绕行,虚线琥珀)
-  const obs = NODES.find(n => n.id === "observe"), llm = NODES.find(n => n.id === "llm");
+  // 回环: 观察注入 → LLM 思考(右侧绕行)
+  const inj = NODES.find(n => n.id === "inject"), th = NODES.find(n => n.id === "think");
   el("path", { class: "edge feedback", id: "loop-edge",
-    d: `M${X + W} ${obs.y + H / 2} C 300 ${obs.y + H / 2}, 300 ${llm.y + H / 2}, ${X + W} ${llm.y + H / 2}` }, svg);
-  const lbl = el("text", { class: "edge-label", x: 246, y: 320 }, svg);
+    d: `M${X + W} ${inj.y + H / 2} C 300 ${inj.y + H / 2}, 300 ${th.y + H / 2}, ${X + W} ${th.y + H / 2}` }, svg);
+  const lbl = el("text", { class: "edge-label", x: 246, y: 400 }, svg);
   lbl.textContent = "观察 / 错误反馈";
+}
+function setNode(id, state) {
+  const el = $("node-" + id);
+  if (!el) return;
+  el.setAttribute("class", "node " + state);
+  // done 状态在标签后加 ✓(做完不常绿,只留中性 + 对勾)
+  const labelEl = el.querySelector("text:not(.icon):not(.st)");
+  if (labelEl) {
+    const base = labelEl.getAttribute("data-base") || labelEl.textContent;
+    labelEl.setAttribute("data-base", base);
+    labelEl.textContent = state === "done" ? base + " ✓" : base;
+  }
 }
 function setNode(id, state) {
   const el = $("node-" + id);
@@ -212,52 +237,82 @@ function setNode(id, state) {
 
 /* ---------------- 事件处理 ---------------- */
 function buffer(step, fn) { stepBuf[step] = stepBuf[step] || {}; fn(stepBuf[step]); }
+let streamEl = null;  // 当前流式生成区
 function handleEvent(ev) {
   const { type, payload } = ev;
   switch (type) {
     case "run_started": resetView(); curRun = ev.run_id; setBadge("running"); break;
-    case "llm_generating": setNode("llm", "active"); break;
+    case "llm_generating":
+      setNode("think", "active");
+      startStream(payload.step); break;
+    case "llm_token":
+      appendStream(payload.delta); break;
     case "llm_generated":
-      setNode("llm", "success");
+      setNode("think", "done");
       buffer(payload.step, b => b.generated = payload);
-      appendLog(ev); break;
+      finishStream(); appendLog(ev); break;
     case "parse_ok":
-      setNode("parse", "success");
+      setNode("extract", "done"); setNode("repair", "done");
       buffer(payload.step, b => { b.thought = payload.thought;
         b.action = {function: payload.function, kwargs: payload.kwargs}; });
       appendLog(ev); break;
-    case "parse_failed": setNode("parse", "failed"); markFeedback(); appendLog(ev); break;
+    case "parse_failed": setNode("extract", "failed"); markFeedback(); appendLog(ev); break;
     case "tool_validation_error":
-      setNode("validate", "failed"); markFeedback();
+      if (payload.kind === "unknown_tool") setNode("toolchk", "failed");
+      else if (payload.kind === "finalize_invalid") setNode("final", "failed");
+      else setNode("paramchk", "failed");
+      markFeedback();
       buffer(payload.step, b => (b.errors = b.errors || []).push(payload.detail || payload.kind));
       appendLog(ev); break;
     case "error_detected":
-      setNode("errdetect", "failed"); markFeedback();
+      setNode("errdet", "failed"); markFeedback();
       buffer(payload.step, b => (b.errors = b.errors || []).push(payload.message));
       appendLog(ev); break;
     case "tool_started":
-      setNode("validate", "success"); setNode("errdetect", "success");
+      setNode("toolchk", "done"); setNode("paramchk", "done");
+      setNode("errdet", "done"); setNode("snap", "done");
       setNode("tool", "active"); renderToolStarted(payload); appendLog(ev); break;
     case "tool_finished":
-      setNode("tool", "success");
-      if (payload.is_expert) { setNode("expert", "success"); document.getElementById("expert-edge").setAttribute("class", "edge"); }
+      setNode("tool", "done");
+      if (payload.is_expert) { setNode("expert", "done"); document.getElementById("expert-edge").setAttribute("class", "edge"); }
       renderToolFinished(payload); appendLog(ev); break;
     case "tool_failed": setNode("tool", "failed"); markFeedback(); appendLog(ev); break;
     case "observation_injected":
-      setNode("observe", "success");
+      setNode("wrap", "done"); setNode("inject", "done");
       buffer(payload.step, b => { if (!payload.is_error_feedback) b.obs = payload.head; });
       appendLog(ev); break;
     case "step_completed":
-      setNode("task", "success"); setNode("observe", "success");
+      setNode("task", "done");
       renderStep(payload); break;
     case "finalize_result":
-      setNode("finalize", "success"); renderFinalize(payload.result); appendLog(ev); break;
+      setNode("final", "done"); renderFinalize(payload.result); appendLog(ev); break;
     case "run_finished":
       setBadge(payload.status, payload.cost);
-      if (payload.status !== "passed") setNode("finalize", "failed");
+      if (payload.status !== "passed") setNode("final", "failed");
       $("start").disabled = false; $("cancel").disabled = true;
       appendLog(ev); break;
   }
+}
+/* 流式生成区: 中栏顶部实时显示 LLM 输出 */
+function startStream(step) {
+  if (streamEl) streamEl.remove();
+  streamEl = document.createElement("div");
+  streamEl.className = "step-card stream-card";
+  streamEl.innerHTML = `<div class="step-head"><span class="step-no">Step ${step} · 生成中</span><span style="color:var(--blue)">▍</span></div>
+    <div class="stream-text" style="white-space:pre-wrap;font-size:12px;color:#9fb4cc"></div>`;
+  $("steps").prepend(streamEl);
+}
+function appendStream(delta) {
+  if (!streamEl) return;
+  const t = streamEl.querySelector(".stream-text");
+  t.textContent += delta;
+  $("steps").scrollTop = $("steps").scrollHeight;
+}
+function finishStream() {
+  if (!streamEl) return;
+  const head = streamEl.querySelector(".step-head");
+  if (head) head.innerHTML = head.innerHTML.replace("生成中", "已生成");
+  streamEl = null;
 }
 function markFeedback() {
   const e = $("loop-edge"); if (e) e.setAttribute("class", "edge feedback");
@@ -269,7 +324,7 @@ function resetView() {
   $("loop-edge").setAttribute("class", "edge feedback");
   $("expert-edge").setAttribute("class", "edge");
   $("steps").innerHTML = ""; $("tool-detail").innerHTML = ""; $("events-log").innerHTML = "";
-  stepBuf = {}; finalizeShown = false;
+  stepBuf = {}; finalizeShown = false; streamEl = null;
 }
 function renderStep(p) {
   const b = stepBuf[p.step]; if (!b) return;
@@ -377,6 +432,31 @@ async function loadJobs() {
   const jobs = await (await fetch(`/api/jobs?env=${env}`)).json();
   $("job").innerHTML = jobs.map(j => `<option value="${j.job_id}">${j.job_id} · ${j.anomaly.slice(0, 40)}</option>`).join("");
 }
+/* ---------------- 案例库 ---------------- */
+async function openCases() {
+  const [cases, kb] = await Promise.all([
+    (await fetch("/api/cases")).json(),
+    (await fetch("/api/kb")).json(),
+  ]);
+  const esc = escapeHtml;
+  let html = `<h3 style="color:var(--muted)">案例(异常实例 + 标注)</h3><table>
+    <tr><th>环境</th><th>job_id</th><th>异常描述</th><th>根因(标注)</th><th>责任</th></tr>`;
+  for (const c of cases) {
+    const gt = c.ground_truth || {};
+    html += `<tr><td>${esc(c.env)}</td><td>${esc(c.job_id)}</td>
+      <td>${esc(c.anomaly)}</td><td>${esc(gt.root_cause || "-")}</td>
+      <td>${esc(gt.responsibility || "-")}</td></tr>`;
+  }
+  html += `</table><div class="kb"><h3 style="color:var(--muted)">知识库(RAG 检索示例-答案对,共 ${kb.length} 条)</h3>`;
+  for (const e of kb) {
+    html += `<details><summary><b>[${esc(e.env)}] 示例日志</b> ${esc(e.text.slice(0, 80))}...</summary>
+      <pre>${esc(e.text)}</pre><pre style="border-color:var(--green)">→ ${esc(e.answer)}</pre></details>`;
+  }
+  html += `</div>`;
+  $("cases-content").innerHTML = html;
+  $("cases-modal").style.display = "block";
+}
+
 /* ---------------- 初始化 ---------------- */
 (async function init() {
   buildSvg();

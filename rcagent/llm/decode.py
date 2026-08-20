@@ -20,10 +20,15 @@ def generate(
     messages: list[dict],
     *,
     mode: str = "greedy",
+    stream_cb: Callable[[str], None] | None = None,
 ) -> Generation:
-    """按模式生成;greedy/sampling 之外自动应用自适应惩罚。"""
+    """按模式生成;greedy/sampling 之外自动应用自适应惩罚。
+
+    stream_cb 给出时流式返回(逐块回调增量文本,Web 可视化用)。
+    """
     if mode == "greedy":
-        return _generate_with_penalty(client, cfg, messages, temperature=0.0)
+        return _generate_with_penalty(client, cfg, messages, temperature=0.0,
+                                      stream_cb=stream_cb)
     if mode == "sampling":
         decoding = cfg.get("decoding") or cfg
         s = decoding.get("sampling") or {}
@@ -33,6 +38,7 @@ def generate(
             messages,
             temperature=s.get("temperature", 0.9),
             top_p=s.get("top_p", 0.6),
+            stream_cb=stream_cb,
         )
     raise ValueError(f"unknown decode mode: {mode}")
 
@@ -44,6 +50,7 @@ def _generate_with_penalty(
     *,
     temperature: float,
     top_p: float | None = None,
+    stream_cb: Callable[[str], None] | None = None,
 ) -> Generation:
     threshold = cfg.get("penalty_threshold_tokens", 4096)
     max_iter = cfg.get("max_penalty_iterations", 3)
@@ -51,7 +58,8 @@ def _generate_with_penalty(
 
     freq = pres = 0.0
     gen = client.chat(
-        messages, temperature=temperature, top_p=top_p, frequency_penalty=freq, presence_penalty=pres
+        messages, temperature=temperature, top_p=top_p, frequency_penalty=freq,
+        presence_penalty=pres, stream_cb=stream_cb,
     )
     for _ in range(max_iter):
         if gen.completion_tokens <= threshold:
@@ -66,5 +74,6 @@ def _generate_with_penalty(
             top_p=top_p,
             frequency_penalty=freq,
             presence_penalty=pres,
+            stream_cb=stream_cb,
         )
     return gen

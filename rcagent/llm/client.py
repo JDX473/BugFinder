@@ -66,8 +66,13 @@ class LLMClient:
         top_p: float | None = None,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
+        stream_cb: Callable[[str], None] | None = None,
     ) -> Generation:
-        """单次 chat 调用;失败自动重试(指数退避)。"""
+        """单次 chat 调用;失败自动重试(指数退避)。
+
+        stream_cb 给出时使用流式返回(逐块回调增量文本,Web 可视化用);
+        mock 模式不流式(一次性返回)。
+        """
         if self.provider == "mock" or self._force_mock:
             assert self.mock_script is not None
             text = self.mock_script(messages, dict(temperature=temperature))
@@ -77,6 +82,31 @@ class LLMClient:
         last_err: Exception | None = None
         for attempt in range(self._cfg.get("max_retries", 3) + 1):
             try:
+                if stream_cb is not None:
+                    stream = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=temperature,
+                        top_p=top_p,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
+                        stream=True,
+                    )
+                    parts: list[str] = []
+                    p_tok = c_tok = 0
+                    for chunk in stream:
+                        delta = chunk.choices[0].delta.content if chunk.choices else None
+                        if delta:
+                            parts.append(delta)
+                            stream_cb(delta)
+                        if chunk.usage:
+                            p_tok = chunk.usage.prompt_tokens or 0
+                            c_tok = chunk.usage.completion_tokens or 0
+                    text = "".join(parts)
+                    self.total_prompt_tokens += p_tok
+                    self.total_completion_tokens += c_tok
+                    return Generation(text=text, prompt_tokens=p_tok,
+                                      completion_tokens=c_tok, model=self.model)
                 resp = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,

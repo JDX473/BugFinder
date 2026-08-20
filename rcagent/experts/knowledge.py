@@ -68,19 +68,7 @@ def build_demo_kb(embedder: Embedder) -> KnowledgeBase:
     论文要求知识库严格排除标注规则;这里的"答案"是场景的根因描述
     与证据(即诊断知识),标注集(ground truth)不进入知识库。
     """
-    from ..env.local import SCENARIOS
-
-    examples = []
-    for key, s in SCENARIOS.items():
-        err_lines = s["err_lines"]
-        examples.append(KBExample(
-            text="\n".join(err_lines),
-            answer=(
-                f"interpretation: {s['root_cause']}\n"
-                f"evidence: {err_lines[0]}"
-            ),
-        ))
-    return KnowledgeBase(examples, embedder)
+    return KnowledgeBase(demo_kb_examples(), embedder)
 
 
 def build_im_kb(embedder: Embedder) -> KnowledgeBase:
@@ -89,7 +77,12 @@ def build_im_kb(embedder: Embedder) -> KnowledgeBase:
     阶段 1 只有 Redis 故障案例;阶段 2(故障注入)后扩充 RocketMQ/
     积压/连接类模式。答案即诊断知识,与标注集分离。
     """
-    examples = [
+    return KnowledgeBase(im_kb_examples(), embedder)
+
+
+def im_kb_examples() -> list[KBExample]:
+    """IM 知识库静态内容(供 API/文档展示,不依赖 embedder)。"""
+    return [
         KBExample(
             text="""2026-08-19T00:06:03.599+08:00 ERROR --- c.q.im.chat.service.OutboxService: outbox scan error
 org.springframework.data.redis.RedisSystemException: Error in execution
@@ -105,4 +98,20 @@ org.springframework.data.redis.RedisSystemException: Error in execution
                     "evidence: async process error"),
         ),
     ]
-    return KnowledgeBase(examples, embedder)
+
+
+def demo_kb_examples() -> list[KBExample]:
+    """demo 知识库静态内容(供 API/文档展示,不依赖 embedder)。"""
+    from ..env.local import SCENARIOS
+
+    examples = []
+    for key, s in SCENARIOS.items():
+        err_lines = s["err_lines"]
+        examples.append(KBExample(
+            text="\n".join(err_lines),
+            answer=(
+                f"interpretation: {s['root_cause']}\n"
+                f"evidence: {err_lines[0]}"
+            ),
+        ))
+    return examples

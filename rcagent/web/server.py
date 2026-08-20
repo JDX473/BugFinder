@@ -61,6 +61,39 @@ def create_app(cfg=None, runs_dir: str = "runs") -> FastAPI:
                          "detect_time": meta.get("detect_time", "")})
         return jobs
 
+    @app.get("/api/cases")
+    def list_cases():
+        """案例库: 全部案例(env + job_id + 异常 + ground_truth)。"""
+        from ..env.im_env import IM_JOBS_DIR
+        from ..env.local import DATA_DIR
+
+        cases = []
+        for env_name, data_dir in (("demo", DATA_DIR), ("im", IM_JOBS_DIR)):
+            for p in sorted(data_dir.glob("*/job.json")):
+                try:
+                    meta = json.loads(p.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                cases.append({
+                    "env": env_name,
+                    "job_id": meta.get("job_id", p.parent.name),
+                    "anomaly": meta.get("anomaly", ""),
+                    "detect_time": meta.get("detect_time", ""),
+                    "ground_truth": meta.get("ground_truth", {}),
+                })
+        return cases
+
+    @app.get("/api/kb")
+    def list_kb():
+        """知识库(RAG 检索内容): 示例-答案对(env 分组)。"""
+        from ..experts.knowledge import demo_kb_examples, im_kb_examples
+
+        def _dump(examples, env_name):
+            return [{"env": env_name, "text": e.text, "answer": e.answer}
+                    for e in examples]
+
+        return _dump(demo_kb_examples(), "demo") + _dump(im_kb_examples(), "im")
+
     @app.post("/api/runs", status_code=201)
     def start_run(req: StartRunRequest):
         try:
