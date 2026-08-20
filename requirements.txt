@@ -8,5 +8,8 @@ rapidfuzz>=3.0
 # Louvain 社区检测(日志分区, M3 使用)
 python-louvain>=0.16
 networkx>=3.0
+# Web 运行时(可视化页面)
+fastapi>=0.110
+uvicorn>=0.29
 # 测试
 pytest>=8.0

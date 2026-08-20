@@ -16,6 +16,23 @@ from ..llm.client import LLMClient
 from ..llm.decode import generate
 from . import prompts as prompt_builder
 from .errors import ErrorDetector
+from .events import (
+    AgentEvents,
+    EVENT_ERROR_DETECTED,
+    EVENT_FINALIZE_RESULT,
+    EVENT_LLM_GENERATED,
+    EVENT_LLM_GENERATING,
+    EVENT_OBSERVATION_INJECTED,
+    EVENT_PARSE_FAILED,
+    EVENT_PARSE_OK,
+    EVENT_RUN_FINISHED,
+    EVENT_RUN_STARTED,
+    EVENT_STEP_COMPLETED,
+    EVENT_TOOL_FAILED,
+    EVENT_TOOL_FINISHED,
+    EVENT_TOOL_STARTED,
+    EVENT_TOOL_VALIDATION_ERROR,
+)
 from .obs import SnapshotStore
 from .parser import ParseFailure, parse_action
 from .tools import FINALIZE_NAME, ToolError, ToolRegistry, make_finalize_spec
@@ -54,6 +71,7 @@ class RCAgent:
         variant: str = "full",
         framework_rules: str | None = None,
         task_requirements: str | None = None,
+        events: AgentEvents | None = None,
     ):
         self.cfg = cfg
         self.llm = llm
@@ -63,6 +81,7 @@ class RCAgent:
         self.variant = variant
         self.framework_rules = framework_rules or prompt_builder.build_framework_rules()
         self.task_requirements = task_requirements or prompt_builder.build_task_requirements()
+        self._events = events or AgentEvents()
 
     # -- 变体(消融/基线) --------------------------------------------------
 
@@ -84,11 +103,13 @@ class RCAgent:
 
     @classmethod
     def build(cls, cfg: Config, llm: LLMClient, env, *, variant: str | None = None,
-              framework_rules=None, task_requirements=None) -> "RCAgent":
+              framework_rules=None, task_requirements=None,
+              events: AgentEvents | None = None) -> "RCAgent":
         """从配置与目标服务环境构建完整 agent(工具注册 + finalize + 检测器)。
 
         variant 控制消融/基线(论文 §V-B): full 默认;react 关闭全部增强;
         no_experts / no_jsonregen / no_obsk / no_obs_head 单组件消融。
+        events 为可视化运行时提供事件回调(可选,默认 None)。
         """
         variant = variant or cfg.agent.get("variant", "full")
         if variant not in VARIANTS:
@@ -112,6 +133,7 @@ class RCAgent:
         return cls(
             cfg, llm, registry, store, detector, variant=variant,
             framework_rules=framework_rules, task_requirements=task_requirements,
+            events=events,
         )
 
     # -- 主循环 ------------------------------------------------------------
@@ -119,6 +141,10 @@ class RCAgent:
     def run(self, job: JobDesc, *, decode_mode: str = "greedy",
             max_steps: int | None = None) -> Trajectory:
         """完整轨迹:重置检测器 → 初始消息 → 循环到 finalize 或步数上限。"""
+        events = self._events
+        events.emit(EVENT_RUN_STARTED, job_id=job.job_id, anomaly=job.anomaly,
+                    variant=self.variant, decode_mode=decode_mode,
+                    max_steps=max_steps or self.cfg.agent.max_steps)
         self.detector.reset()
         messages = self._initial_messages(job)
         traj = Trajectory(job_id=job.job_id)
@@ -127,6 +153,15 @@ class RCAgent:
         traj.finished = time.time()
         traj.status = STATUS_PASSED if result is not None else STATUS_FAILED
         traj.result = result
+        if events.cancelled:
+            status = "cancelled"
+        elif result is not None:
+            status = "passed"
+        else:
+            status = "failed"
+        events.emit(EVENT_RUN_FINISHED, status=status, steps=len(traj.records),
+                    invalid_actions=traj.invalid_actions, result=result,
+                    cost=self.llm.cost_estimate())
         return traj
 
     def replay_messages(self, job: JobDesc, traj: Trajectory,
@@ -162,6 +197,7 @@ class RCAgent:
             variant=self.variant,
             framework_rules=self.framework_rules,
             task_requirements=self.task_requirements,
+            events=self._events,
         )
 
     def _initial_messages(self, job: JobDesc) -> list[dict]:
@@ -178,10 +214,20 @@ class RCAgent:
         """循环主体:生成→解析→执行→观察,直至 finalize(返回四项)或步数耗尽(None)。"""
         cfg = self.cfg
         max_steps = max_steps or cfg.agent.max_steps
+        events = self._events
 
         for step in range(1, max_steps + 1):
+            if events.cancelled:
+                return None
+            events.emit(EVENT_LLM_GENERATING, step=step)
+            t0 = time.monotonic()
             gen = generate(self.llm, cfg, messages, mode=decode_mode)
+            latency_ms = int((time.monotonic() - t0) * 1000)
             text = gen.text
+            events.emit(EVENT_LLM_GENERATED, step=step, text=text, model=gen.model,
+                        tokens={"prompt": gen.prompt_tokens, "completion": gen.completion_tokens},
+                        penalty_escalations=gen.extra.get("penalty_escalations", 0),
+                        latency_ms=latency_ms)
             record = StepRecord(
                 step=step,
                 thought="",
@@ -194,6 +240,8 @@ class RCAgent:
             feedback = self._handle_step(step, text, job, record, traj)
             record.observation_head = feedback if feedback is not None else ""
             traj.add(record)
+            events.emit(EVENT_STEP_COMPLETED, step=step,
+                        feedback_present=feedback is not None)
 
             if feedback is None:  # finalize 成功
                 return record.action["kwargs"] if record.action else None
@@ -214,53 +262,81 @@ class RCAgent:
                      traj: Trajectory) -> str | None:
         """处理单步:解析→校验→执行。返回注入的反馈文本;finalize 成功返回 None。"""
         cfg = self.cfg.agent
+        events = self._events
         parsed = parse_action(text, use_regen=self.use_regen)
         if isinstance(parsed, ParseFailure):
             record.error = parsed.reason
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(
+            feedback = ERROR_FEEDBACK.format(
                 message=f"Error: {parsed.reason}. Respond with a valid JSON action in "
                         "{'function': ..., 'kwargs': {...}} format."
             )
+            events.emit(EVENT_PARSE_FAILED, step=step, reason=parsed.reason)
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
 
         record.thought = parsed.thought
         record.action = {"function": parsed.function, "kwargs": parsed.kwargs}
         tool = parsed.function
         kwargs = parsed.kwargs
+        events.emit(EVENT_PARSE_OK, step=step, thought=parsed.thought,
+                    function=tool, kwargs=kwargs)
 
         spec = self.registry.get(tool)
         if spec is None:
             record.error = f"unknown tool: {tool}"
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(
+            feedback = ERROR_FEEDBACK.format(
                 message=f"Error: tool '{tool}' does not exist. Use only tools from the "
                         "TOOLS DOCUMENTATION."
             )
+            events.emit(EVENT_TOOL_VALIDATION_ERROR, step=step, tool=tool,
+                        kind="unknown_tool", detail=record.error)
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
 
         # 参数校验:仅接受已声明参数,且必填参数齐备
         unknown = set(kwargs) - set(spec.params)
         if unknown:
             record.error = f"unknown params: {sorted(unknown)}"
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(
+            feedback = ERROR_FEEDBACK.format(
                 message=f"Error: tool '{tool}' received undeclared parameter(s) "
                         f"{sorted(unknown)}. Declared: {sorted(spec.params)}."
             )
+            events.emit(EVENT_TOOL_VALIDATION_ERROR, step=step, tool=tool,
+                        kind="unknown_params", detail=record.error)
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
         missing = [p for p in spec.params if p not in kwargs]
         if missing:
             record.error = f"missing params: {missing}"
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(
+            feedback = ERROR_FEEDBACK.format(
                 message=f"Error: tool '{tool}' is missing required parameter(s) "
                         f"{missing}."
             )
+            events.emit(EVENT_TOOL_VALIDATION_ERROR, step=step, tool=tool,
+                        kind="missing_params", detail=record.error)
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
 
         # 论文 §III-C2 错误处理: 重复调用 / trivial 输入 / 过早 finalize
         err_msg = self.detector.detect(tool, kwargs, step)
         if err_msg is not None:
             record.error = err_msg
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(message=err_msg)
+            feedback = ERROR_FEEDBACK.format(message=err_msg)
+            events.emit(EVENT_ERROR_DETECTED, step=step, tool=tool,
+                        kind=self.detector.last_kind.value if self.detector.last_kind else "unknown",
+                        message=err_msg)
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
 
         self.detector.record_call(tool, kwargs, step)
 
@@ -271,26 +347,45 @@ class RCAgent:
             result = self._extract_finalize(resolved, record)
             if result is None:
                 traj.invalid_actions += 1
-                return ERROR_FEEDBACK.format(
+                feedback = ERROR_FEEDBACK.format(
                     message="Error: finalize requires all fields "
                             f"{cfg.finalize_required_fields}; missing or invalid fields."
                 )
+                events.emit(EVENT_TOOL_VALIDATION_ERROR, step=step, tool=tool,
+                            kind="finalize_invalid", detail=record.error or "")
+                events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                            is_error_feedback=True)
+                return feedback
             record.action["kwargs"] = result
+            events.emit(EVENT_FINALIZE_RESULT, step=step, result=result)
             return None
 
         # 执行工具
+        events.emit(EVENT_TOOL_STARTED, step=step, tool=tool, kwargs=kwargs)
+        t0 = time.monotonic()
         try:
             tool_result = self.registry.call(tool, resolved, job, obs_mode=self.obs_mode)
         except ToolError as e:
             record.error = str(e)
             traj.invalid_actions += 1
-            return ERROR_FEEDBACK.format(message=f"Error: tool '{tool}' failed: {e}")
+            feedback = ERROR_FEEDBACK.format(message=f"Error: tool '{tool}' failed: {e}")
+            events.emit(EVENT_TOOL_FAILED, step=step, tool=tool, error=str(e))
+            events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                        is_error_feedback=True)
+            return feedback
+        latency_ms = int((time.monotonic() - t0) * 1000)
 
         record.snapshot = tool_result.snapshot
         head = tool_result.head
         if tool_result.snapshot is not None:
             self.detector.record_info_tool(tool)
-        return OBSERVATION_FEEDBACK.format(head=head)
+        events.emit(EVENT_TOOL_FINISHED, step=step, tool=tool, head=head,
+                    snapshot=tool_result.snapshot, truncated=tool_result.truncated,
+                    is_expert=spec.is_expert, latency_ms=latency_ms)
+        feedback = OBSERVATION_FEEDBACK.format(head=head)
+        events.emit(EVENT_OBSERVATION_INJECTED, step=step, head=feedback,
+                    is_error_feedback=False)
+        return feedback
 
     def _extract_finalize(self, kwargs: dict, record: StepRecord) -> dict | None:
         cfg = self.cfg.agent

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RCAgent Web Runtime</title>
+<style>
+:root {
+  --bg: #0f1419; --panel: #171d26; --border: #2a3441;
+  --text: #d7dee8; --muted: #8b98a9;
+  --blue: #4da3ff; --green: #3ecf8e; --red: #ff5f5f; --amber: #f5b04c;
+  --gray: #3a4452;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
+header {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+header label { color: var(--muted); font-size: 12px; }
+select, input[type=text], button {
+  background: #1e2632; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: 13px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--blue); }
+button.primary { background: var(--blue); color: #081018; font-weight: 600; border: none; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+#badge { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+#badge .s { color: var(--green); }
+#badge .f { color: var(--red); }
+#badge .r { color: var(--blue); }
+main { display: grid; grid-template-columns: 320px 1fr 380px; gap: 12px; padding: 12px; height: calc(100vh - 52px); }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.panel h2 { font-size: 13px; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--border); letter-spacing: .5px; }
+.panel .body { overflow-y: auto; padding: 10px 12px; flex: 1; }
+
+/* ---- Loop 节点图 ---- */
+#loop-svg { width: 100%; }
+.node rect { rx: 8; }
+.node text { fill: var(--text); font-size: 12px; text-anchor: middle; }
+.node .st { font-size: 10px; fill: var(--muted); }
+.edge { stroke: var(--gray); stroke-width: 1.5; fill: none; }
+.edge.feedback { stroke: var(--amber); stroke-dasharray: 5 3; }
+.edge-label { fill: var(--muted); font-size: 10px; }
+.node.pending rect { fill: #1e2632; stroke: var(--gray); }
+.node.active rect { fill: #12304f; stroke: var(--blue); stroke-width: 2; animation: pulse 1.2s infinite; }
+.node.success rect { fill: #0f2b22; stroke: var(--green); }
+.node.failed rect { fill: #31151a; stroke: var(--red); }
+@keyframes pulse { 50% { stroke-opacity: .35; } }
+
+/* ---- 步骤流 ---- */
+#steps .step-card { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; padding: 10px; background: #141a22; }
+#steps .step-head { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+#steps .step-no { font-weight: 700; color: var(--blue); }
+#steps .thought { color: var(--text); white-space: pre-wrap; margin: 4px 0; font-size: 13px; }
+#steps .action-chip {
+  display: inline-block; font-family: Consolas, monospace; font-size: 12px;
+  background: #0d2b47; color: #8fd0ff; border-radius: 5px; padding: 3px 8px; margin: 2px 0;
+}
+#steps .err-banner { background: #31151a; color: #ffb3b3; border-radius: 6px; padding: 6px 8px; font-size: 12px; margin: 4px 0; white-space: pre-wrap; }
+#steps .obs { background: #10151c; border-radius: 6px; padding: 6px 8px; font-size: 12px; color: #a9b7c8; margin: 4px 0; white-space: pre-wrap; max-height: 160px; overflow: auto; }
+#steps .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+#steps .finalize-card { border: 1px solid var(--green); background: #0f2b22; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+#steps .finalize-card h3 { color: var(--green); font-size: 13px; margin-bottom: 6px; }
+#steps .f-item { margin: 4px 0; font-size: 12px; }
+#steps .f-item b { color: var(--muted); }
+
+/* ---- 详情面板 ---- */
+#tool-detail .kv { font-size: 12px; margin: 4px 0; }
+#tool-detail .kv b { color: var(--muted); }
+#tool-detail pre { background: #10151c; border-radius: 6px; padding: 8px; font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+#events-log { font-family: Consolas, monospace; font-size: 11px; }
+#events-log div { border-bottom: 1px solid #1c2430; padding: 2px 0; color: var(--muted); }
+#events-log .t { color: var(--blue); }
+select#history { width: 100%; margin-bottom: 8px; }
+.btn-sm { font-size: 12px; padding: 3px 8px; }
+
+/* modal */
+#modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10; }
+#modal .box { position: absolute; inset: 8% 15%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; }
+#modal .box header { border-bottom: 1px solid var(--border); }
+#modal pre { flex: 1; overflow: auto; padding: 12px; font-size: 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <label>任务 <select id="job"></select></label>
+  <label><input type="checkbox" id="mock" checked> mock(无需 key)</label>
+  <label>variant <select id="variant">
+    <option value="full">full</option>
+    <option value="react">react(基线)</option>
+    <option value="no_experts">no_experts</option>
+    <option value="no_jsonregen">no_jsonregen</option>
+    <option value="no_obsk">no_obsk</option>
+    <option value="no_obs_head">no_obs_head</option>
+  </select></label>
+  <button id="start" class="primary">▶ 提交任务</button>
+  <button id="cancel" disabled>✕ 取消</button>
+  <div id="badge"></div>
+</header>
+<main>
+  <div class="panel">
+    <h2>决策循环 Loop(实时高亮当前节点)</h2>
+    <div class="body" style="display:flex;align-items:flex-start;justify-content:center">
+      <svg id="loop-svg" viewBox="0 0 300 640"></svg>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>执行步骤(Thought / Action / Observation)</h2>
+    <div class="body" id="steps"></div>
+  </div>
+  <div class="panel">
+    <h2>详情</h2>
+    <div class="body">
+      <h3 style="font-size:12px;color:var(--muted);margin:4px 0">历史回放</h3>
+      <select id="history"></select>
+      <div id="tool-detail"></div>
+      <h3 style="font-size:12px;color:var(--muted);margin:10px 0 4px">原始事件流(最近 50 条)</h3>
+      <div id="events-log"></div>
+    </div>
+  </div>
+</main>
+<div id="modal"><div class="box"><header><b id="modal-title" style="flex:1">快照全文</b><button onclick="closeModal()">关闭</button></header><pre id="modal-content"></pre></div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let es = null, curRun = null, stepBuf = {}, finalizeShown = false;
+
+/* ---------------- Loop 节点图 ---------------- */
+const NODES = [
+  { id: "task",      y: 20,  label: "任务输入" },
+  { id: "llm",       y: 95,  label: "LLM 生成", sub: "Thought + Function JSON" },
+  { id: "parse",     y: 170, label: "JsonRegen 解析", sub: "Algorithm 2" },
+  { id: "validate",  y: 245, label: "工具校验", sub: "参数合法性" },
+  { id: "errdetect", y: 320, label: "错误检测", sub: "§III-C2 三类错误" },
+  { id: "tool",      y: 400, label: "执行工具", sub: "信息收集 / 快照解析" },
+  { id: "expert",    y: 400, label: "专家分析", sub: "log/code agent", branch: true },
+  { id: "observe",   y: 480, label: "观察注入", sub: "head + [snapshot: key]" },
+  { id: "finalize",  y: 555, label: "finalize 出口", sub: "四项 RCA 结果" },
+];
+function buildSvg() {
+  const svg = $("loop-svg");
+  svg.innerHTML = "";
+  // 回环边(观察注入 → LLM 生成)
+  const loop = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  loop.setAttribute("class", "edge feedback");
+  loop.setAttribute("id", "loop-edge");
+  loop.setAttribute("d", "M90 480 C 250 540, 250 60, 150 95");
+  svg.appendChild(loop);
+  const lbl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  lbl.setAttribute("class", "edge-label"); lbl.setAttribute("x", "218"); lbl.setAttribute("y", "300");
+  lbl.textContent = "观察 / 错误反馈"; svg.appendChild(lbl);
+  // 主节点
+  for (const n of NODES) {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "node pending"); g.setAttribute("id", "node-" + n.id);
+    const x = n.branch ? 150 : 60, w = n.branch ? 120 : 180;
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    r.setAttribute("x", x); r.setAttribute("y", n.y); r.setAttribute("width", w); r.setAttribute("height", 48);
+    g.appendChild(r);
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", x + w / 2); t.setAttribute("y", n.y + 21); t.textContent = n.label;
+    g.appendChild(t);
+    if (n.sub) {
+      const st = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      st.setAttribute("class", "st"); st.setAttribute("x", x + w / 2); st.setAttribute("y", n.y + 37);
+      st.textContent = n.sub; g.appendChild(st);
+    }
+    svg.appendChild(g);
+    // 边(除分支节点与专家节点特殊处理)
+    if (!n.branch && n.id !== "task" && n.id !== "expert") {
+      const prev = NODES[NODES.indexOf(n) - 1];
+      if (prev && !prev.branch) {
+        const e = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        e.setAttribute("class", "edge");
+        e.setAttribute("x1", "150"); e.setAttribute("y1", prev.y + 48);
+        e.setAttribute("x2", "150"); e.setAttribute("y2", n.y);
+        svg.appendChild(e);
+      }
+    }
+  }
+  // 专家分支边
+  const be = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  be.setAttribute("class", "edge"); be.setAttribute("id", "expert-edge");
+  be.setAttribute("x1", "240"); be.setAttribute("y1", 424); be.setAttribute("x2", "270"); be.setAttribute("y2", 424);
+  svg.appendChild(be);
+}
+function setNode(id, state) {
+  const el = $("node-" + id);
+  if (el) el.setAttribute("class", "node " + state);
+}
+
+/* ---------------- 事件处理 ---------------- */
+function buffer(step, fn) { stepBuf[step] = stepBuf[step] || {}; fn(stepBuf[step]); }
+function handleEvent(ev) {
+  const { type, payload } = ev;
+  switch (type) {
+    case "run_started": resetView(); curRun = ev.run_id; setBadge("running"); break;
+    case "llm_generating": setNode("llm", "active"); break;
+    case "llm_generated":
+      setNode("llm", "success");
+      buffer(payload.step, b => b.generated = payload);
+      appendLog(ev); break;
+    case "parse_ok":
+      setNode("parse", "success");
+      buffer(payload.step, b => { b.thought = payload.thought;
+        b.action = {function: payload.function, kwargs: payload.kwargs}; });
+      appendLog(ev); break;
+    case "parse_failed": setNode("parse", "failed"); markFeedback(); appendLog(ev); break;
+    case "tool_validation_error":
+      setNode("validate", "failed"); markFeedback();
+      buffer(payload.step, b => (b.errors = b.errors || []).push(payload.detail || payload.kind));
+      appendLog(ev); break;
+    case "error_detected":
+      setNode("errdetect", "failed"); markFeedback();
+      buffer(payload.step, b => (b.errors = b.errors || []).push(payload.message));
+      appendLog(ev); break;
+    case "tool_started":
+      setNode("validate", "success"); setNode("errdetect", "success");
+      setNode("tool", "active"); renderToolStarted(payload); appendLog(ev); break;
+    case "tool_finished":
+      setNode("tool", "success");
+      if (payload.is_expert) { setNode("expert", "success"); document.getElementById("expert-edge").setAttribute("class", "edge"); }
+      renderToolFinished(payload); appendLog(ev); break;
+    case "tool_failed": setNode("tool", "failed"); markFeedback(); appendLog(ev); break;
+    case "observation_injected":
+      setNode("observe", "success");
+      buffer(payload.step, b => { if (!payload.is_error_feedback) b.obs = payload.head; });
+      appendLog(ev); break;
+    case "step_completed":
+      setNode("task", "success"); setNode("observe", "success");
+      renderStep(payload); break;
+    case "finalize_result":
+      setNode("finalize", "success"); renderFinalize(payload.result); appendLog(ev); break;
+    case "run_finished":
+      setBadge(payload.status, payload.cost);
+      if (payload.status !== "passed") setNode("finalize", "failed");
+      appendLog(ev); break;
+  }
+}
+function markFeedback() {
+  const e = $("loop-edge"); if (e) e.setAttribute("class", "edge feedback");
+}
+
+/* ---------------- 渲染 ---------------- */
+function resetView() {
+  for (const n of NODES) setNode(n.id, "pending");
+  $("loop-edge").setAttribute("class", "edge feedback");
+  $("expert-edge").setAttribute("class", "edge");
+  $("steps").innerHTML = ""; $("tool-detail").innerHTML = ""; $("events-log").innerHTML = "";
+  stepBuf = {}; finalizeShown = false;
+}
+function renderStep(p) {
+  const b = stepBuf[p.step]; if (!b) return;
+  const card = document.createElement("div");
+  card.className = "step-card";
+  let html = `<div class="step-head"><span class="step-no">Step ${p.step}</span>`;
+  if (b.generated) html += `<span>${(b.generated.latency_ms/1000).toFixed(1)}s · ${b.generated.tokens.completion} tok</span>`;
+  html += `</div>`;
+  if (b.thought) html += `<div class="thought">💭 ${escapeHtml(b.thought)}</div>`;
+  if (b.action) html += `<div class="action-chip">${escapeHtml(JSON.stringify(b.action))}</div>`;
+  for (const err of b.errors || []) html += `<div class="err-banner">⚠ ${escapeHtml(err)}</div>`;
+  if (b.obs) html += `<details><summary>Observation</summary><div class="obs">${escapeHtml(b.obs)}</div></details>`;
+  card.innerHTML = html;
+  $("steps").appendChild(card);
+  $("steps").scrollTop = $("steps").scrollHeight;
+}
+function renderToolStarted(p) {
+  $("tool-detail").innerHTML = `<div class="kv"><b>工具</b> ${escapeHtml(p.tool)}</div>
+    <div class="kv"><b>参数</b> ${escapeHtml(JSON.stringify(p.kwargs))}</div>
+    <div class="kv" style="color:var(--amber)">执行中…</div>`;
+}
+function renderToolFinished(p) {
+  let snap = p.snapshot ? `<button class="btn-sm" onclick="viewSnapshot('${p.snapshot}')">查看完整快照</button>` : "";
+  $("tool-detail").innerHTML = `<div class="kv"><b>工具</b> ${escapeHtml(p.tool)}${p.is_expert ? ' <span style="color:var(--green)">(专家)</span>' : ''}</div>
+    <div class="kv"><b>耗时</b> ${(p.latency_ms/1000).toFixed(1)}s ${p.truncated ? '<span style="color:var(--amber)">(截断)</span>' : ''}</div>
+    <pre>${escapeHtml(p.head.slice(0, 1500))}</pre>${snap}`;
+}
+function renderFinalize(result) {
+  if (finalizeShown) return; finalizeShown = true;
+  const card = document.createElement("div");
+  card.className = "finalize-card";
+  card.innerHTML = `<h3>✅ 最终 RCA 结果</h3>` + Object.entries(result)
+    .map(([k, v]) => `<div class="f-item"><b>${k}</b>: ${escapeHtml(String(v))}</div>`).join("");
+  $("steps").appendChild(card);
+  $("steps").scrollTop = $("steps").scrollHeight;
+}
+function appendLog(ev) {
+  const box = $("events-log");
+  const div = document.createElement("div");
+  div.innerHTML = `<span class="t">#${ev.seq} ${ev.type}</span> <span>${escapeHtml(JSON.stringify(ev.payload).slice(0, 140))}</span>`;
+  box.prepend(div);
+  while (box.children.length > 50) box.lastChild.remove();
+}
+
+/* ---------------- 快照 ---------------- */
+async function viewSnapshot(key) {
+  const r = await fetch(`/api/runs/${curRun}/snapshots/${key}`);
+  if (!r.ok) { alert("历史回放不包含快照全文(仅 live 会话可用)"); return; }
+  const d = await r.json();
+  $("modal-title").textContent = `快照 ${key}`;
+  $("modal-content").textContent = d.content;
+  $("modal").style.display = "block";
+}
+function closeModal() { $("modal").style.display = "none"; }
+
+/* ---------------- 任务控制 ---------------- */
+async function startRun() {
+  const body = { job_id: $("job").value, variant: $("variant").value,
+                 decode: "greedy", mock: $("mock").checked };
+  const r = await fetch("/api/runs", { method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify(body) });
+  if (!r.ok) { alert((await r.json()).detail || "启动失败"); return; }
+  const d = await r.json();
+  curRun = d.run_id;
+  $("start").disabled = true; $("cancel").disabled = false;
+  resetView();
+  es = new EventSource(`/api/runs/${curRun}/events`);
+  es.onmessage = e => handleEvent(JSON.parse(e.data));
+  es.onerror = () => { /* EventSource 自动重连 */ };
+}
+async function cancelRun() {
+  await fetch(`/api/runs/${curRun}/cancel`, { method: "POST" });
+}
+async function loadHistory() {
+  const r = await fetch("/api/runs?limit=20");
+  const runs = await r.json();
+  const sel = $("history");
+  sel.innerHTML = `<option value="">— 历史回放 —</option>` +
+    runs.map(x => `<option value="${x.run_id}">${x.job_id} ${x.status} (${x.steps}步)</option>`).join("");
+  sel.onchange = async () => {
+    if (!sel.value) return;
+    const rr = await fetch(`/api/runs/${sel.value}`);
+    const snap = await rr.json();
+    curRun = sel.value;
+    resetView();
+    setBadge(snap.meta.status);
+    for (const ev of snap.events) handleEvent(ev);
+    $("start").disabled = false; $("cancel").disabled = true;
+  };
+}
+function setBadge(status, cost) {
+  const cls = {running: "r", passed: "s", failed: "f", cancelled: "f", error: "f"}[status] || "";
+  let html = status ? `<span class="${cls}">● ${status}</span>` : "";
+  if (cost) html += ` · tokens ${cost.prompt_tokens}+${cost.completion_tokens} · $${cost.estimated_cost_usd}`;
+  $("badge").innerHTML = html;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+/* ---------------- 初始化 ---------------- */
+(async function init() {
+  buildSvg();
+  const jobs = await (await fetch("/api/jobs")).json();
+  $("job").innerHTML = jobs.map(j => `<option value="${j.job_id}">${j.job_id} · ${j.anomaly.slice(0, 40)}</option>`).join("");
+  $("start").onclick = startRun;
+  $("cancel").onclick = cancelRun;
+  loadHistory();
+})();
+</script>
+</body>
+</html>

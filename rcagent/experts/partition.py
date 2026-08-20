@@ -18,13 +18,6 @@ from ..llm.embedding import Embedder
 DEFAULT_WINDOW = 200  # 论文: j − i ∈ (0, 200]
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a)) or 1.0
-    nb = math.sqrt(sum(y * y for y in b)) or 1.0
-    return dot / (na * nb)
-
-
 def greedy_overlap_removal(labels: list[int]) -> list[int]:
     """贪心切换最小量聚类标签,使每个簇在原文中连续(论文步骤 11)。
 
@@ -72,17 +65,27 @@ def semantic_partition(
     """把日志行分为语义相关的连续 chunk。
 
     权重截断负余弦到 0(负相似度无聚类意义);exp(−d) 使远距离配对
-    权重指数衰减,与论文公式一致。
+    权重指数衰减,与论文公式一致。相似度矩阵用 numpy 批量计算
+    (3000 行 × 200 窗 × 1024 维,纯 Python 循环需数分钟)。
     """
     if len(lines) <= 1:
         return [lines]
 
+    import numpy as np
+
     vecs = embedder.embed(lines)
+    V = np.asarray(vecs, dtype=np.float32)
+    norms = np.linalg.norm(V, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    Vn = V / norms
+    sim_matrix = Vn @ Vn.T  # (n, n) 余弦相似度
+
     G = nx.Graph()
     G.add_nodes_from(range(len(lines)))
     for i in range(len(lines)):
-        for j in range(i + 1, min(i + window, len(lines))):
-            sim = _cosine(vecs[i], vecs[j])
+        j_hi = min(i + window, len(lines))
+        for j in range(i + 1, j_hi):
+            sim = float(sim_matrix[i, j])
             if sim <= 0:
                 continue
             w = sim * math.exp(-(j - i))

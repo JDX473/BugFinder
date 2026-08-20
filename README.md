@@ -62,6 +62,24 @@ finalize 出口——所有反馈都回到 Controller Memory,循环不因错误�
 > 环境变量 `EMBEDDING_API_KEY`);API 批次上限 20 已处理。`--mock` 模式下仍用内置
 > 词袋 hash 便于离线测试。
 
+## Web 可视化运行时(新入口)
+
+除了 CLI,项目带一个 **Web 在线运行时**:提交任务后实时观察 Agent 执行
+——左侧 Loop 节点图高亮当前节点(进行中蓝色脉冲/成功绿/失败红),
+中间 Thought/Action/Observation 步骤流,右侧工具调用详情(含 OBSK 快照全文)
+与原始事件流;支持历史回放与 SSE 断线重连。
+
+```bash
+# 启动(默认 127.0.0.1:8080;页面默认勾选 mock,无需 API key)
+python -m rcagent.web
+# 浏览器打开 http://127.0.0.1:8080 → 选任务 → 提交 → 观察节点推进
+# 真实模式: 取消 mock 勾选(需 DEEPSEEK_API_KEY + EMBEDDING_API_KEY)
+```
+
+技术栈:FastAPI + SSE(13 种 agent 运行事件,经 `rcagent/core/events.py`
+可选回调从 agent 循环发射,默认 None 不影响现有行为)+ 单文件前端
+(vanilla JS + SVG,零构建)。API 文档:`http://127.0.0.1:8080/docs`。
+
 ## 快速开始
 
 ```bash

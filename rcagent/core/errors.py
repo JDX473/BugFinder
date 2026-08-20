@@ -39,6 +39,7 @@ class ErrorDetector:
         self.enabled = enabled
         self.calls: list[CallRecord] = []
         self.info_tool_calls: set[str] = set()  # 已成功调用的信息收集工具名
+        self.last_kind: ErrorKind | None = None  # 最近一次 detect 命中的错误类型(事件用)
 
     def _args_key(self, kwargs: dict) -> str:
         return hashlib.md5(
@@ -57,6 +58,7 @@ class ErrorDetector:
 
     def detect(self, tool: str, kwargs: dict, step: int) -> str | None:
         """返回错误反馈文本;无错误返回 None。"""
+        self.last_kind = None
         if not self.enabled:
             return None
         eh = self.cfg.get("error_handling") or {}
@@ -69,6 +71,7 @@ class ErrorDetector:
             key = self._args_key(kwargs)
             for rec in self.calls:
                 if rec.tool == tool and rec.args_hash == key:
+                    self.last_kind = ErrorKind.DUPLICATE_CALL
                     return (
                         f"Error: tool '{tool}' was already invoked with identical arguments "
                         f"at step {rec.step}. Duplicate calls yield no new "
@@ -81,6 +84,7 @@ class ErrorDetector:
             min_chars = eh.get("trivial_input_min_chars", 5)
             text = " ".join(str(v) for v in kwargs.values()).strip()
             if len(text) < min_chars:
+                self.last_kind = ErrorKind.TRIVIAL_INPUT
                 return (
                     f"Error: input to expert tool '{tool}' is trivial "
                     f"({len(text)} chars). Provide a substantial log excerpt or a "
@@ -91,6 +95,7 @@ class ErrorDetector:
         if tool == FINALIZE_NAME:
             min_tools = eh.get("early_finalize_min_tools", 1)
             if len(self.info_tool_calls) < min_tools:
+                self.last_kind = ErrorKind.EARLY_FINALIZE
                 return (
                     "Error: finalize called before thorough investigation. You have not "
                     "collected enough information yet. Gather evidence from "
