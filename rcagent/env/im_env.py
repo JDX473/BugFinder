@@ -1,25 +1,31 @@
 """IM 环境(QuantumLink IM 真实服务):工具实现与数据源。
 
 服务专属件(PRD §2.11 耦合点 1):把 RCAgent 接入用户的真实 IM 项目。
-阶段 1 数据源为真实日志文件(chat/connect);时间截止约束按日志行首
-的 ISO 时间戳过滤(chat 日志);connect 日志暂无时间戳,整段尾部返回。
+
+日志查询走 IM 自带的日志查询平台(im-logsearch, Lucene 索引,
+POST /api/v1/logs/search): 时间范围(timeTo=检测时刻)/级别/关键词原生支持,
+返回结构化行(ts/level/logger/msg/raw)。堆栈行无时间戳不被索引,
+因此异常类名(如 RedisSystemException)搜索会自动 fallback 到文件读取。
 
 工具(语义极简参数):
-  chat_log(query, before)  — 按关键词 + 检测时刻过滤 chat 日志
-  connect_log(before)      — connect 长连接层日志尾部
+  chat_log(query, before)  — 按关键词 + 检测时刻查询 chat 日志
+  connect_log(before)      — connect 长连接层日志
   error_summary(before)    — chat 日志 ERROR 类型分布 + 时间范围
-  outbox_error(before)     — outbox scan error 详情(含堆栈)
+  outbox_error(before)     — outbox scan error 详情(含堆栈,文件读取)
 """
 
 from __future__ import annotations
 
 import json
 import re
+import urllib.request
 from pathlib import Path
 
 from ..core.tools import ToolError, ToolRegistry, ToolSpec
 
 IM_JOBS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "im_jobs"
+
+LOGSEARCH_URL = "http://127.0.0.1:8083/api/v1/logs/search"
 
 # chat 日志行首时间戳: 2026-08-19T00:06:03.599+08:00(ISO,可字典序比较)
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
@@ -27,10 +33,12 @@ _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
 
 class IMEnvironment:
     def __init__(self, job_dir: str | Path | None = None, llm=None, embedder=None,
-                 kb=None, code_repo: str | Path | None = None):
+                 kb=None, code_repo: str | Path | None = None,
+                 logsearch_url: str | None = None):
         self.job_dir = Path(job_dir) if job_dir else IM_JOBS_DIR
         self._code_repo = Path(code_repo) if code_repo else Path(
             r"E:\QIUZHAO\IM")
+        self._logsearch_url = logsearch_url or LOGSEARCH_URL
         # 专家工具(与 demo 环境一致): 日志专家 + 代码专家(仓库=IM 源码)
         self._log_expert = None
         if llm is not None and embedder is not None and kb is not None:
@@ -43,7 +51,70 @@ class IMEnvironment:
 
             self._code_expert = CodeExpertAgent(llm, self._code_repo)
 
-    # -- 数据访问 ------------------------------------------------------------
+    # -- 日志查询平台 API(im-logsearch) -------------------------------------
+
+    def _api_search(self, *, keyword: str | None = None, level: str | None = None,
+                    before: str | None = None, limit: int = 200) -> dict:
+        """POST /api/v1/logs/search;timeTo=检测时刻(时间截止约束)。"""
+        query: dict = {}
+        if keyword:
+            query["keyword"] = keyword
+        if level:
+            query["level"] = level
+        if before:
+            query["timeTo"] = before
+        query["limit"] = limit
+        req = urllib.request.Request(
+            self._logsearch_url, data=json.dumps(query).encode("utf-8"),
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001 — 平台不可用时降级文件读取
+            return {"total": 0, "hits": [], "error": str(e)}
+
+    @staticmethod
+    def _hits_to_text(hits: list[dict], limit: int = 200) -> str:
+        """结构化 hit → 原始行文本(与文件读取形态一致,LLM 可读)。"""
+        lines = []
+        for h in hits[:limit]:
+            raw = (h.get("raw") or "").strip()
+            if raw:
+                lines.append(raw)
+            else:
+                ts = h.get("ts") or ""
+                lines.append(f"{ts} {h.get('level', '')} {h.get('logger', '')} : {h.get('msg', '')}")
+        return "\n".join(lines)
+
+    def _error_summary_api(self, before: str) -> str:
+        """基于 im-logsearch 的 ERROR 分布摘要(时间窗 + logger 聚合)。"""
+        result = self._api_search(level="ERROR", before=before, limit=2000)
+        hits = result.get("hits", [])
+        if not hits:
+            return "(no ERROR lines before detection time)"
+        counts: dict[str, int] = {}
+        ts_list: list[int] = []
+        for h in hits:
+            logger_name = h.get("logger") or "unknown"
+            counts[logger_name] = counts.get(logger_name, 0) + 1
+            if h.get("tsMillis"):
+                ts_list.append(h["tsMillis"])
+        top = sorted(counts.items(), key=lambda kv: -kv[1])[:10]
+        total = result.get("total", sum(counts.values()))
+        window = ""
+        if ts_list:
+            import datetime
+
+            def _fmt(ms):
+                return datetime.datetime.fromtimestamp(ms / 1000).strftime(
+                    "%Y-%m-%dT%H:%M:%S")
+
+            window = f"ERROR window: {_fmt(min(ts_list))} ~ {_fmt(max(ts_list))}, "
+        summary = f"{window}total {total} lines (sample {len(hits)})\n"
+        summary += "\n".join(f"  {name}: {n}" for name, n in top)
+        return summary
+
+    # -- 数据访问(文件 fallback,含堆栈) -------------------------------------
 
     def _chat_log_path(self, job_id: str) -> Path:
         meta = json.loads((self.job_dir / job_id / "job.json").read_text(encoding="utf-8"))
@@ -134,37 +205,46 @@ class IMEnvironment:
 
     def register_tools(self, registry: ToolRegistry, *, include_experts: bool = True) -> None:
         def chat_log_handler(kw, env):
+            # API 优先(结构化/时间过滤);堆栈类关键词(异常类名)API 无索引,fallback 文件
+            result = self._api_search(keyword=kw.get("query"), before=env.detect_time,
+                                      limit=200)
+            if result.get("total", 0) > 0:
+                return self._hits_to_text(result.get("hits", []))
             return self._tail_filtered(self._chat_log_path(env.job_id),
                                        env.detect_time, kw.get("query"), 4000)
 
         def connect_log_handler(kw, env):
+            result = self._api_search(keyword=kw.get("query"), before=env.detect_time,
+                                      limit=200)
+            if result.get("total", 0) > 0:
+                return self._hits_to_text(result.get("hits", []))
             return self._tail_filtered(self._connect_log_path(env.job_id),
                                        env.detect_time, kw.get("query"), 4000)
 
         registry.register(ToolSpec(
             name="chat_log",
-            description="Query the im-chat service log (Spring Boot, 8081). Pass a "
-                        "keyword (e.g. 'ERROR', 'outbox', class name) to filter lines. "
-                        "Only lines before the detection time are returned.",
+            description="Query the im-chat service log (Spring Boot, 8081) via the "
+                        "im-logsearch platform. Pass a keyword (e.g. 'outbox scan "
+                        "error', 'ERROR', class name) to filter lines. Only lines "
+                        "before the detection time are returned.",
             params={"query": "keyword to filter log lines (optional, empty = all)"},
             handler=chat_log_handler,
             examples='{"query": "outbox scan error"}',
         ))
         registry.register(ToolSpec(
             name="connect_log",
-            description="Query the im-connect long-connection layer log (Netty, 19001). "
-                        "Pass a keyword to filter lines.",
+            description="Query the im-connect long-connection layer log (Netty, 19001) "
+                        "via the im-logsearch platform. Pass a keyword to filter lines.",
             params={"query": "keyword to filter log lines (optional)"},
             handler=connect_log_handler,
-            examples='{"query": "ERROR"}',
+            examples='{"query": "channel error"}',
         ))
         registry.register(ToolSpec(
             name="error_summary",
             description="Summary of ERROR lines in the im-chat log: time window and "
-                        "distribution by logger class.",
+                        "distribution by logger class (via im-logsearch platform).",
             params={},
-            handler=lambda kw, env: self._error_summary(self._chat_log_path(env.job_id),
-                                                        env.detect_time),
+            handler=lambda kw, env: self._error_summary_api(env.detect_time),
         ))
         registry.register(ToolSpec(
             name="outbox_error",

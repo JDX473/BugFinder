@@ -97,6 +97,13 @@ org.springframework.data.redis.RedisSystemException: Error in execution
                     "(seq 递增/幂等/缓存依赖 Redis)\n"
                     "evidence: async process error"),
         ),
+        KBExample(
+            text="""ERROR com.quantumlink.im.connect.handler.UpstreamProducer - send failed topic=client2server
+org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to 192.168.40.1:10911 failed""",
+            answer=("interpretation: RocketMQ broker 宕机/不可达,im-connect 上行消息无法"
+                    "上抛到 im-chat(RemotingConnectException 连 broker 失败)\n"
+                    "evidence: send failed topic=client2server; RemotingConnectException"),
+        ),
     ]
 
 

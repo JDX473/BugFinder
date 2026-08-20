@@ -1,0 +1,15 @@
+{
+ "job_id": "im_mq_broker_down",
+ "anomaly": "im-connect 层消息上抛失败: UpstreamProducer send failed topic=client2server",
+ "detect_time": "2026-08-20T14:53:30+08:00",
+ "ground_truth": {
+  "root_cause": "RocketMQ broker 宕机(10911 端口不可达,connect 进程 SYN_SENT 重连),im-connect 的 UpstreamProducer 发送 client2server 消息失败,消息无法上抛到 im-chat,MessageDispatcher 记录 upstream send failed",
+  "solution": "恢复 RocketMQ broker(重启 mqbroker 并检查 namesrv 路由与磁盘空间)",
+  "evidence": "UpstreamProducer - send failed topic=client2server; MessageDispatcher - upstream send failed: user=u_97a149997ead4d31 clientMsgId=...",
+  "responsibility": "platform"
+ },
+ "data_sources": {
+  "chat_log": "E:\\QIUZHAO\\IM\\tmp-chat.log",
+  "connect_log": "E:\\QIUZHAO\\IM\\tmp-connect-19001.log"
+ }
+}
