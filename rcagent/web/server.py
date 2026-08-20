@@ -99,9 +99,12 @@ def create_app(cfg=None, runs_dir: str = "runs") -> FastAPI:
         try:
             run_id = manager.start(req.job_id, variant=req.variant,
                                    decode=req.decode, mock=req.mock,
-                                   anomaly=req.anomaly, env=req.env)
+                                   anomaly=req.anomaly, env=req.env,
+                                   detect_time=req.detect_time)
         except RunBusy as e:
             raise HTTPException(status_code=409, detail=str(e)) from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         return {"run_id": run_id, "status": "running"}
 
     @app.get("/api/runs")

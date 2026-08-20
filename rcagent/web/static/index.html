@@ -101,8 +101,8 @@ select#history { width: 100%; margin-bottom: 8px; }
     <option value="demo">demo(合成)</option>
     <option value="im">im(真实服务)</option>
   </select></label>
-  <label>实例 ID <input type="text" id="job" size="16" placeholder="留空用默认"></label>
-  <label>异常描述 <input type="text" id="anomaly" size="34" placeholder="必填:描述你观察到的异常"></label>
+  <label>实例 ID <input type="text" id="job" size="16" placeholder="可选: 评估/回放用"></label>
+  <label>异常描述 <input type="text" id="anomaly" size="34" placeholder="必填: 描述你观察到的异常(实时排查)"></label>
   <label><input type="checkbox" id="mock" checked> mock(无需 key)</label>
   <label>variant <select id="variant">
     <option value="full">full</option>
@@ -407,21 +407,21 @@ async function viewSnapshot(key) {
 function closeModal() { $("modal").style.display = "none"; }
 
 /* ---------------- 任务控制 ---------------- */
-/* 描述关键词 → 实例匹配: 保证检测时刻与故障时间窗一致(否则时间截止约束会屏蔽故障) */
-function matchJobId(env, anomaly) {
-  if (env !== "im") return "demo_es_conn_timeout";
-  const a = anomaly.toLowerCase();
-  if (/mq|broker|消息上抛|send failed|rocket/.test(a)) return "im_mq_broker_down";
-  if (/redis|outbox|zpopmin|扫描|发件箱/.test(a)) return "im_outbox_redis_fail";
-  if (/channel|帧|连接|frame|too long/.test(a)) return "im_connect_channel_error";
-  return "im_outbox_redis_fail";
-}
 async function startRun() {
   const env = $("env").value;
+  const jobId = $("job").value.trim();  // 留空 = 实时排查模式(im)
   const anomaly = $("anomaly").value.trim();
-  const jobId = $("job").value.trim() || matchJobId(env, anomaly);
-  const body = { job_id: jobId, variant: $("variant").value,
-                 decode: "greedy", mock: $("mock").checked, env };
+  if (!jobId && $("mock").checked) {
+    alert("实时排查模式(实例 ID 留空)使用真实大模型,请取消 mock 勾选;或用案例 ID 走 mock 评估。");
+    return;
+  }
+  if (!jobId && !anomaly) {
+    alert("实时排查模式必须填写异常描述。");
+    return;
+  }
+  const body = { variant: $("variant").value, decode: "greedy",
+                 mock: $("mock").checked, env };
+  if (jobId) body.job_id = jobId;
   if (anomaly) body.anomaly = anomaly;
   const r = await fetch("/api/runs", { method: "POST", headers: {"Content-Type": "application/json"},
                                        body: JSON.stringify(body) });

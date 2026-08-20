@@ -40,6 +40,7 @@ class RunState:
     decode: str
     anomaly: str | None = None
     env: str = "demo"          # demo(合成) | im(QuantumLink IM)
+    detect_time: str | None = None  # 缺省 = 当前时刻(实时排查模式)
     status: str = "running"
     events: list[dict] = field(default_factory=list)
     seq: int = 0
@@ -64,17 +65,22 @@ class RunManager:
 
     # -- 对外 API -----------------------------------------------------------
 
-    def start(self, job_id: str, *, variant: str = "full",
+    def start(self, job_id: str | None = None, *, variant: str = "full",
               decode: str = "greedy", mock: bool = True,
-              anomaly: str | None = None, env: str = "demo") -> str:
-        """启动一个 run;已有活跃 run 时抛 RunBusy。"""
+              anomaly: str | None = None, env: str = "demo",
+              detect_time: str | None = None) -> str:
+        """启动一个 run;已有活跃 run 时抛 RunBusy。
+
+        job_id 缺省 = 实时排查模式(im 环境): 数据源用环境默认日志,
+        detect_time 取当前时刻,Agent 自动聚焦最近故障。
+        """
         with self._active_lock:
             if self._active is not None:
                 raise RunBusy(f"run {self._active.run_id} is still active")
             state = RunState(
-                run_id=f"live_{job_id}_{int(time.time() * 1000)}",
-                job_id=job_id, mock=mock, variant=variant, decode=decode,
-                anomaly=anomaly, env=env,
+                run_id=f"live_{job_id or 'realtime'}_{int(time.time() * 1000)}",
+                job_id=job_id or "", mock=mock, variant=variant, decode=decode,
+                anomaly=anomaly, env=env, detect_time=detect_time,
             )
             self._active = state
         t = threading.Thread(target=self._worker, args=(state,), daemon=True)
@@ -201,17 +207,18 @@ class RunManager:
                     self._active = None
 
     def _run_agent(self, state: RunState, events: AgentEvents):
-        """装配并执行 agent(复用 main.run_one 的装配逻辑)。
+        """装配并执行 agent。
 
-        mock 分支强制 embedding.provider="mock"(不依赖 EMBEDDING_API_KEY,
-        否则无 key 时构造 Embedder 即抛 ValueError)。
-        env_name: demo(合成)| im(QuantumLink IM 真实服务)。
+        两种模式:
+        - 评估模式(job_id 指定): 用案例的检测时刻与数据源(ground_truth 仅评估用);
+        - 实时排查模式(job_id 空, im 环境): 数据源为环境固定日志,
+          检测时刻 = 当前时刻,Agent 自动聚焦最近故障(需填异常描述,不支持 mock)。
         """
         from ..core.agent import JobDesc, RCAgent
         from ..experts.knowledge import build_demo_kb, build_im_kb
         from ..llm.embedding import Embedder
 
-        if getattr(state, "env", "demo") == "im":
+        if state.env == "im":
             from ..env.im_env import IMEnvironment, IM_JOBS_DIR
             from ..env.local import load_job
 
@@ -230,11 +237,30 @@ class RunManager:
             kb_fn = build_demo_kb
             task_requirements = None
 
-        meta = load_job(state.job_id, data_dir)
+        if state.job_id:
+            meta = load_job(state.job_id, data_dir)
+            detect_time = state.detect_time or meta["detect_time"]
+            anomaly = (state.anomaly or meta["anomaly"]).strip() or meta["anomaly"]
+        else:
+            # 实时排查模式: 数据源固定,检测时刻 = 当前
+            if state.env != "im":
+                raise ValueError("demo 环境为评估数据集,请指定实例 ID")
+            if state.mock:
+                raise ValueError("实时排查模式不支持 mock,请取消 mock 勾选")
+            if not (state.anomaly or "").strip():
+                raise ValueError("实时排查模式必须填写异常描述")
+            import datetime
+
+            meta = {"job_id": "realtime"}
+            detect_time = state.detect_time or datetime.datetime.now(
+                datetime.timezone(datetime.timedelta(hours=8))).strftime(
+                "%Y-%m-%dT%H:%M:%S+08:00")
+            anomaly = state.anomaly.strip()
+
         job = JobDesc(
             job_id=meta["job_id"],
-            anomaly=(state.anomaly or meta["anomaly"]).strip() or meta["anomaly"],
-            detect_time=meta["detect_time"],
+            anomaly=anomaly,
+            detect_time=detect_time,
         )
 
         if state.mock:

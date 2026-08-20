@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class StartRunRequest(BaseModel):
-    job_id: str = Field(..., description="demo job id(见 GET /api/jobs);作为数据源")
-    anomaly: str | None = Field(None, description="自定义异常描述;留空用任务的默认描述")
+    job_id: str | None = Field(None, description="实例 ID(评估/回放模式);留空 = 实时排查模式(im 环境)")
+    anomaly: str | None = Field(None, description="异常描述: 实时模式必填,评估模式留空用案例默认")
+    detect_time: str | None = Field(None, description="检测时刻(ISO);留空: 评估模式用案例,实时模式用当前时刻")
     variant: str = Field("full", description="full|react|no_experts|no_jsonregen|no_obsk|no_obs_head")
     decode: str = Field("greedy", description="greedy|sampling")
-    mock: bool = Field(True, description="mock 模式无需 API key")
+    mock: bool = Field(True, description="mock 模式无需 API key(仅评估模式支持)")
     env: str = Field("demo", description="demo(合成)| im(QuantumLink IM 真实服务)")
 
 

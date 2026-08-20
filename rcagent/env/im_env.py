@@ -25,6 +25,10 @@ from ..core.tools import ToolError, ToolRegistry, ToolSpec
 
 IM_JOBS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "im_jobs"
 
+# 实时排查模式的数据源固定(不依赖实例 ID): IM 服务的日志文件
+CHAT_LOG_PATH = Path(r"E:\QIUZHAO\IM\tmp-chat.log")
+CONNECT_LOG_PATH = Path(r"E:\QIUZHAO\IM\tmp-connect-19001.log")
+
 LOGSEARCH_URL = "http://127.0.0.1:8083/api/v1/logs/search"
 
 # chat 日志行首时间戳: 2026-08-19T00:06:03.599+08:00(ISO,可字典序比较)
@@ -54,15 +58,27 @@ class IMEnvironment:
     # -- 日志查询平台 API(im-logsearch) -------------------------------------
 
     def _api_search(self, *, keyword: str | None = None, level: str | None = None,
-                    before: str | None = None, limit: int = 200) -> dict:
-        """POST /api/v1/logs/search;timeTo=检测时刻(时间截止约束)。"""
+                    before: str | None = None, limit: int = 200,
+                    regex: str | None = None) -> dict:
+        """POST /api/v1/logs/search;timeTo=检测时刻(时间截止约束)。
+
+        regex 用于限定服务(logger 前缀): im-logsearch 是全日志库检索,
+        不加服务过滤时 chat/connect 的日志会互相混杂。
+        """
         query: dict = {}
         if keyword:
-            query["keyword"] = keyword
+            kw = keyword.strip()
+            # im-logsearch 的 keyword 走 Lucene QueryParser: 空格分词默认 OR 语义,
+            # 含空格的关键词自动短语化(引号)保证精确匹配
+            if " " in kw and not kw.startswith('"'):
+                kw = f'"{kw}"'
+            query["keyword"] = kw
         if level:
             query["level"] = level
         if before:
             query["timeTo"] = before
+        if regex:
+            query["regex"] = regex
         query["limit"] = limit
         req = urllib.request.Request(
             self._logsearch_url, data=json.dumps(query).encode("utf-8"),
@@ -74,21 +90,33 @@ class IMEnvironment:
             return {"total": 0, "hits": [], "error": str(e)}
 
     @staticmethod
-    def _hits_to_text(hits: list[dict], limit: int = 200) -> str:
-        """结构化 hit → 原始行文本(与文件读取形态一致,LLM 可读)。"""
+    def _hits_to_text(hits: list[dict], service: str | None = None,
+                      limit: int = 200) -> str:
+        """结构化 hit → 原始行文本(按 logger 前缀过滤服务,LLM 可读)。
+
+        im-logsearch 是全日志库检索(无 service 参数),chat/connect 的
+        行会互相混杂;此处按 logger 过滤,过滤后为空由调用方 fallback 文件。
+        """
         lines = []
-        for h in hits[:limit]:
+        for h in hits[:limit * 3]:
+            logger_name = h.get("logger") or ""
+            if service and service not in logger_name:
+                continue
             raw = (h.get("raw") or "").strip()
             if raw:
                 lines.append(raw)
             else:
                 ts = h.get("ts") or ""
-                lines.append(f"{ts} {h.get('level', '')} {h.get('logger', '')} : {h.get('msg', '')}")
+                lines.append(f"{ts} {h.get('level', '')} {logger_name} : {h.get('msg', '')}")
+            if len(lines) >= limit:
+                break
         return "\n".join(lines)
 
     def _error_summary_api(self, before: str) -> str:
-        """基于 im-logsearch 的 ERROR 分布摘要(时间窗 + logger 聚合)。"""
+        """基于 im-logsearch 的 ERROR 分布摘要(时间窗 + logger 聚合,限定 chat 服务)。"""
         result = self._api_search(level="ERROR", before=before, limit=2000)
+        hits = [h for h in result.get("hits", [])
+                if "com.quantumlink.im.chat" in (h.get("logger") or "")]
         hits = result.get("hits", [])
         if not hits:
             return "(no ERROR lines before detection time)"
@@ -117,12 +145,10 @@ class IMEnvironment:
     # -- 数据访问(文件 fallback,含堆栈) -------------------------------------
 
     def _chat_log_path(self, job_id: str) -> Path:
-        meta = json.loads((self.job_dir / job_id / "job.json").read_text(encoding="utf-8"))
-        return Path(meta["data_sources"]["chat_log"])
+        return CHAT_LOG_PATH
 
     def _connect_log_path(self, job_id: str) -> Path:
-        meta = json.loads((self.job_dir / job_id / "job.json").read_text(encoding="utf-8"))
-        return Path(meta["data_sources"]["connect_log"])
+        return CONNECT_LOG_PATH
 
     def _tail_filtered(self, path: Path, before: str, query: str | None,
                        max_lines: int = 4000) -> str:
@@ -138,9 +164,9 @@ class IMEnvironment:
         chunk = 64 * 1024
         pos = size
         buf = ""
-        lines: list[str] = []
-        pending_stack: list[str] = []  # 反向暂存的堆栈行(属于下一个 ERROR 行)
-        while pos > 0 and len(lines) < max_lines * 4:
+        groups: list[list[str]] = []  # 每组 = [ERROR 行, ...跟随堆栈](文件顺序)
+        pending_stack: list[str] = []
+        while pos > 0 and len(groups) * 8 < max_lines:
             read = min(chunk, pos)
             pos -= read
             with open(path, "rb") as f:
@@ -162,15 +188,15 @@ class IMEnvironment:
                                or any(query in s for s in stack))
                     if not matched:
                         continue
-                    lines.append(line)
-                    lines.extend(reversed(stack))  # 恢复堆栈顺序
+                    groups.append([line] + stack)  # 组内: ERROR 行在前,堆栈按文件顺序
                 else:
                     pending_stack.append(line)
-                if len(lines) >= max_lines:
+                if len(groups) * 8 >= max_lines:
                     break
-            if len(lines) >= max_lines:
+            if len(groups) * 8 >= max_lines:
                 break
-        lines.reverse()
+        # 组间反转(时间正序),组内顺序保持
+        lines = [l for g in reversed(groups) for l in g]
         return "\n".join(lines)
 
     def _error_summary(self, path: Path, before: str, max_lines: int = 500) -> str:
@@ -205,19 +231,24 @@ class IMEnvironment:
 
     def register_tools(self, registry: ToolRegistry, *, include_experts: bool = True) -> None:
         def chat_log_handler(kw, env):
-            # API 优先(结构化/时间过滤);堆栈类关键词(异常类名)API 无索引,fallback 文件
-            result = self._api_search(keyword=kw.get("query"), before=env.detect_time,
-                                      limit=200)
-            if result.get("total", 0) > 0:
-                return self._hits_to_text(result.get("hits", []))
+            # API 优先;按 logger 过滤 chat 服务(平台检索不含 service 参数)
+            result = self._api_search(keyword=kw.get("query") or None,
+                                      before=env.detect_time, limit=200)
+            text = self._hits_to_text(result.get("hits", []),
+                                      service="com.quantumlink.im.chat")
+            if text:
+                return text
             return self._tail_filtered(self._chat_log_path(env.job_id),
                                        env.detect_time, kw.get("query"), 4000)
 
         def connect_log_handler(kw, env):
-            result = self._api_search(keyword=kw.get("query"), before=env.detect_time,
-                                      limit=200)
-            if result.get("total", 0) > 0:
-                return self._hits_to_text(result.get("hits", []))
+            # 按 logger 过滤 connect 服务;为空(如宽泛关键词被 chat 淹没)fallback 文件
+            result = self._api_search(keyword=kw.get("query") or None,
+                                      before=env.detect_time, limit=200)
+            text = self._hits_to_text(result.get("hits", []),
+                                      service="com.quantumlink.im.connect")
+            if text:
+                return text
             return self._tail_filtered(self._connect_log_path(env.job_id),
                                        env.detect_time, kw.get("query"), 4000)
 

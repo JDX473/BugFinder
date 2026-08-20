@@ -36,6 +36,12 @@ four items: root_cause, solution, evidence, responsibility.
   long-connection / channel / client connection, query `connect_log` first;
   if it mentions im-chat / business / outbox / Redis, query `chat_log` /
   `error_summary` first. Prefer the log of the layer the anomaly belongs to.
+- **Primary lead**: the anomaly description is the most authoritative clue.
+  If it names a specific symptom or component (e.g. message upstream failure,
+  send failed, channel error), verify that exact symptom in the corresponding
+  log FIRST (e.g. connect_log query "send failed" / "client2server").
+  Do NOT get distracted by other services' continuous background errors in
+  error_summary — they may be pre-existing noise unrelated to this anomaly.
 - Base every claim on observed evidence; quote log lines verbatim.
 - If code understanding is needed (e.g. how OutboxService works), use
   code_agent with a class name (e.g. "OutboxService") — it reads the real
