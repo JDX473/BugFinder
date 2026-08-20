@@ -5,37 +5,29 @@ Large Language Models](https://arxiv.org/abs/2310.16340)(arXiv:2310.16340)的复
 
 详细需求见 [PRD_RCAgent_复现开发文档.md](PRD_RCAgent_复现开发文档.md)。
 
-## 系统架构:决策循环
+## 系统架构:决策循环(真实状态机)
 
 ```mermaid
-flowchart TB
-    START["异常任务<br/>job_id / anomaly / detect_time"] --> MEM
-
-    subgraph MEM["Controller Memory<br/>(system prompt + 完整历史)"]
-        GEN["LLM 生成<br/>Thought + Function JSON"]
-    end
-
-    GEN --> J["JsonRegen 解析<br/>(Algorithm 2)"]
-    J -->|解析失败| ERR1["错误反馈"]
-    J --> CHK{"工具校验<br/>+ 错误检测"}
-    CHK -->|失败| ERR2["错误反馈 + 建议"]
-    CHK -->|通过| EXE["执行工具<br/>(快照键经 OBSK 解析)"]
-
-    EXE -->|信息收集工具| OBS["观察:<br/>head + [snapshot: key]"]
-    EXE -->|专家工具| EXP["专家分析<br/>(Algorithm 1 / 图4)"]
-    EXP --> OBS
-    OBS -->|注入消息历史| GEN
-
-    ERR1 --> MEM
-    ERR2 --> MEM
-    EXE -->|finalize| FIN{"四项结果校验"}
-    FIN -->|缺字段| ERR3["错误反馈"] --> MEM
-    FIN -->|通过| OUT["RCA 结果"]
-    OUT --> TSC["TSC 聚合(可选)<br/>重放采样 + LLM/embedding 聚合"]
+stateDiagram-v2
+    [*] --> LLM_GEN: 任务输入
+    LLM_GEN --> PARSE: 生成 Thought+JSON
+    PARSE --> LLM_GEN: 解析失败(错误反馈)
+    PARSE --> TOOL_CHK: 解析成功
+    TOOL_CHK --> LLM_GEN: 工具不存在/参数错
+    TOOL_CHK --> ERR_DET: 校验通过
+    ERR_DET --> LLM_GEN: 重复调用/trivial/过早finalize
+    ERR_DET --> FINALIZE: 是 finalize
+    ERR_DET --> TOOL_EXEC: 是工具调用
+    TOOL_EXEC --> LLM_GEN: 执行失败
+    TOOL_EXEC --> OBSERVE: 执行成功
+    OBSERVE --> LLM_GEN: 观察注入,下一轮
+    FINALIZE --> [*]: 四项校验通过 → 结果
+    FINALIZE --> LLM_GEN: 缺字段
 ```
 
-四个回路:观察推进调查(正常)、解析失败重试(JsonRegen)、动作修正(错误处理)、
-finalize 出口——所有反馈都回到 Controller Memory,循环不因错误终止。
+真实控制流是**以 LLM 生成为中心的辐射结构**:几乎每个环节(解析/校验/错误检测/
+工具执行/finalize)失败都回退到 LLM 生成,带着错误反馈重新生成——循环不因错误
+终止(对应 agent.py `_loop`/`_handle_step` 的 11 个转移点)。
 
 ## 当前进度(M1~M7 框架,已完成)
 
