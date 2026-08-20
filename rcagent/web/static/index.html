@@ -97,12 +97,12 @@ select#history { width: 100%; margin-bottom: 8px; }
 </head>
 <body>
 <header>
-  <label>环境 <select id="env" onchange="loadJobs()">
+  <label>环境 <select id="env">
     <option value="demo">demo(合成)</option>
     <option value="im">im(真实服务)</option>
   </select></label>
-  <label>任务 <select id="job"></select></label>
-  <label>异常描述 <input type="text" id="anomaly" size="30" placeholder="自定义描述(选任务时留空用默认)"></label>
+  <label>实例 ID <input type="text" id="job" size="16" placeholder="留空用默认"></label>
+  <label>异常描述 <input type="text" id="anomaly" size="34" placeholder="必填:描述你观察到的异常"></label>
   <label><input type="checkbox" id="mock" checked> mock(无需 key)</label>
   <label>variant <select id="variant">
     <option value="full">full</option>
@@ -112,7 +112,7 @@ select#history { width: 100%; margin-bottom: 8px; }
     <option value="no_obsk">no_obsk</option>
     <option value="no_obs_head">no_obs_head</option>
   </select></label>
-  <button id="start" class="primary">▶ 提交任务</button>
+  <button id="start" class="primary">▶ 开始排查</button>
   <button id="cancel" disabled>✕ 取消</button>
   <button id="cases-btn" onclick="openCases()">📚 案例库</button>
   <div id="badge"></div>
@@ -408,9 +408,11 @@ function closeModal() { $("modal").style.display = "none"; }
 
 /* ---------------- 任务控制 ---------------- */
 async function startRun() {
+  const env = $("env").value;
+  const jobId = $("job").value.trim() || (env === "im" ? "im_outbox_redis_fail" : "demo_es_conn_timeout");
   const anomaly = $("anomaly").value.trim();
-  const body = { job_id: $("job").value, variant: $("variant").value,
-                 decode: "greedy", mock: $("mock").checked, env: $("env").value };
+  const body = { job_id: jobId, variant: $("variant").value,
+                 decode: "greedy", mock: $("mock").checked, env };
   if (anomaly) body.anomaly = anomaly;
   const r = await fetch("/api/runs", { method: "POST", headers: {"Content-Type": "application/json"},
                                        body: JSON.stringify(body) });
@@ -453,40 +455,9 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
-async function loadJobs() {
-  const env = $("env").value;
-  const jobs = await (await fetch(`/api/jobs?env=${env}`)).json();
-  $("job").innerHTML = jobs.map(j => `<option value="${j.job_id}">${j.job_id} · ${j.anomaly.slice(0, 40)}</option>`).join("");
-}
-/* ---------------- 案例库 ---------------- */
-async function openCases() {
-  const [cases, kb] = await Promise.all([
-    (await fetch("/api/cases")).json(),
-    (await fetch("/api/kb")).json(),
-  ]);
-  const esc = escapeHtml;
-  let html = `<h3 style="color:var(--muted)">案例(异常实例 + 标注)</h3><table>
-    <tr><th>环境</th><th>job_id</th><th>异常描述</th><th>根因(标注)</th><th>责任</th></tr>`;
-  for (const c of cases) {
-    const gt = c.ground_truth || {};
-    html += `<tr><td>${esc(c.env)}</td><td>${esc(c.job_id)}</td>
-      <td>${esc(c.anomaly)}</td><td>${esc(gt.root_cause || "-")}</td>
-      <td>${esc(gt.responsibility || "-")}</td></tr>`;
-  }
-  html += `</table><div class="kb"><h3 style="color:var(--muted)">知识库(RAG 检索示例-答案对,共 ${kb.length} 条)</h3>`;
-  for (const e of kb) {
-    html += `<details><summary><b>[${esc(e.env)}] 示例日志</b> ${esc(e.text.slice(0, 80))}...</summary>
-      <pre>${esc(e.text)}</pre><pre style="border-color:var(--green)">→ ${esc(e.answer)}</pre></details>`;
-  }
-  html += `</div>`;
-  $("cases-content").innerHTML = html;
-  $("cases-modal").style.display = "block";
-}
-
 /* ---------------- 初始化 ---------------- */
 (async function init() {
   buildSvg();
-  await loadJobs();
   $("start").onclick = startRun;
   $("cancel").onclick = cancelRun;
   loadHistory();
