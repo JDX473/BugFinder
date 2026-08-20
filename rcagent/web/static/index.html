@@ -45,6 +45,9 @@ main { display: grid; grid-template-columns: 320px 1fr 380px; gap: 12px; padding
 .edge { stroke: #4a5868; stroke-width: 2; fill: none; marker-end: url(#arrow); }
 .edge.feedback { stroke: var(--amber); stroke-dasharray: 7 4; marker-end: url(#arrow-amber); }
 .edge-label { fill: var(--amber); font-size: 10px; font-weight: 600; }
+.retreat { stroke: var(--red); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; opacity: .45; }
+.retreat.hot { stroke: var(--red); stroke-width: 2.5; opacity: 1; }
+.retreat-label { fill: var(--red); font-size: 9px; font-weight: 600; }
 .node.pending rect { fill: #1b2330; stroke: #2f3b4c; }
 .node.active rect { fill: #16202e; stroke: var(--blue); stroke-width: 3; filter: url(#glow); animation: pulse 1.2s infinite; }
 .node.done rect { fill: #1b2330; stroke: #3a4a5c; }
@@ -146,20 +149,21 @@ select#history { width: 100%; margin-bottom: 8px; }
 const $ = id => document.getElementById(id);
 let es = null, curRun = null, stepBuf = {}, finalizeShown = false;
 
-/* ---------------- Loop 节点图(13 节点,细化) ---------------- */
+/* ---------------- Loop 节点图(13 节点,含失败回退干线) ---------------- */
+/* retreat: true 的节点失败时,红色虚线回退到 LLM 思考生成(状态机语义) */
 const NODES = [
   { id: "task",    y: 18,  icon: "📥", label: "任务输入", sub: "job / anomaly" },
-  { id: "think",   y: 84,  icon: "🧠", label: "LLM 思考生成", sub: "Thought + JSON" },
-  { id: "extract", y: 150, icon: "🔍", label: "JSON 提取", sub: "FINDJSON" },
-  { id: "repair",  y: 216, icon: "🛠️", label: "JSON 修复", sub: "转义 / YAML 重试" },
-  { id: "toolchk", y: 282, icon: "🧩", label: "工具校验", sub: "工具是否存在" },
-  { id: "paramchk",y: 348, icon: "📋", label: "参数校验", sub: "必填 / 合法" },
-  { id: "errdet",  y: 414, icon: "⚠️", label: "错误检测", sub: "重复 / trivial / 过早" },
+  { id: "think",   y: 84,  icon: "🧠", label: "LLM 思考生成", sub: "回退汇聚点" },
+  { id: "extract", y: 150, icon: "🔍", label: "JSON 提取", sub: "FINDJSON", retreat: true },
+  { id: "repair",  y: 216, icon: "🛠️", label: "JSON 修复", sub: "转义 / YAML 重试", retreat: true },
+  { id: "toolchk", y: 282, icon: "🧩", label: "工具校验", sub: "工具是否存在", retreat: true },
+  { id: "paramchk",y: 348, icon: "📋", label: "参数校验", sub: "必填 / 合法", retreat: true },
+  { id: "errdet",  y: 414, icon: "⚠️", label: "错误检测", sub: "重复 / trivial / 过早", retreat: true },
   { id: "snap",    y: 480, icon: "🔑", label: "快照解析", sub: "OBSK resolve" },
-  { id: "tool",    y: 546, icon: "⚙️", label: "工具执行", sub: "handler + 去重" },
+  { id: "tool",    y: 546, icon: "⚙️", label: "工具执行", sub: "handler + 去重", retreat: true },
   { id: "wrap",    y: 612, icon: "📦", label: "观察包装", sub: "head + snapshot" },
   { id: "inject",  y: 678, icon: "↩️", label: "观察注入", sub: "回 Memory" },
-  { id: "final",   y: 744, icon: "🏁", label: "finalize 出口", sub: "四项 RCA 结果" },
+  { id: "final",   y: 744, icon: "🏁", label: "finalize 出口", sub: "四项 RCA 结果", retreat: true },
   { id: "expert",  y: 546, icon: "🔬", label: "专家分析", sub: "log / code", branch: true },
 ];
 const NS = "http://www.w3.org/2000/svg";
@@ -211,12 +215,32 @@ function buildSvg() {
   // 专家分支连线
   el("path", { class: "edge", id: "expert-edge",
     d: `M${X + W} ${exp.y + H / 2} L246 ${exp.y + H / 2}` }, svg);
-  // 回环: 观察注入 → LLM 思考(右侧绕行)
+  // 回环: 观察注入 → LLM 思考(右侧绕行,琥珀虚线 = 正常下一轮)
   const inj = NODES.find(n => n.id === "inject"), th = NODES.find(n => n.id === "think");
   el("path", { class: "edge feedback", id: "loop-edge",
     d: `M${X + W} ${inj.y + H / 2} C 300 ${inj.y + H / 2}, 300 ${th.y + H / 2}, ${X + W} ${th.y + H / 2}` }, svg);
   const lbl = el("text", { class: "edge-label", x: 246, y: 400 }, svg);
-  lbl.textContent = "观察 / 错误反馈";
+  lbl.textContent = "观察注入 → 下一轮";
+  // 失败回退干线(状态机语义): 左侧通道,各失败节点 → LLM 思考生成
+  // 干线: 从 finalize 高度沿左侧上行到 think(红色虚线,箭头朝上)
+  const th_y = th.y + H / 2, fin_y = NODES.find(n => n.id === "final").y + H / 2;
+  el("path", { class: "retreat", id: "retreat-trunk",
+    d: `M10 ${fin_y} L10 ${th_y}` }, svg);
+  // 各可回退节点的汇入线: 节点左侧 → 干线
+  for (const n of NODES) {
+    if (n.retreat) {
+      el("path", { class: "retreat", id: "retreat-" + n.id,
+        d: `M${X} ${n.y + H / 2} L10 ${n.y + H / 2}` }, svg);
+    }
+  }
+  // 干线顶部箭头(指向 think)+ 标签
+  const redArrow = el("marker", { id: "arrow-red", viewBox: "0 0 10 10", refX: 5, refY: 5,
+    markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
+  el("path", { d: "M0,10 L5,0 L10,10 z", fill: "var(--red)" }, redArrow);
+  el("path", { class: "retreat", id: "retreat-head",
+    d: `M10 ${th_y} L10 ${th_y - 8}`, "marker-end": "url(#arrow-red)" }, svg);
+  el("text", { class: "retreat-label", x: 12, y: 330, transform: "rotate(-90 12 330)" },
+    svg).textContent = "失败回退(带错误反馈重新生成)";
 }
 function setNode(id, state) {
   const el = $("node-" + id);
@@ -229,10 +253,9 @@ function setNode(id, state) {
     labelEl.setAttribute("data-base", base);
     labelEl.textContent = state === "done" ? base + " ✓" : base;
   }
-}
-function setNode(id, state) {
-  const el = $("node-" + id);
-  if (el) el.setAttribute("class", "node " + state);
+  // 失败 → 高亮回退干线(状态机: 该环节失败,回退到 LLM 生成)
+  const trunk = $("retreat-trunk");
+  if (trunk) trunk.setAttribute("class", "retreat" + (state === "failed" ? " hot" : ""));
 }
 
 /* ---------------- 事件处理 ---------------- */
@@ -283,6 +306,7 @@ function handleEvent(ev) {
       appendLog(ev); break;
     case "step_completed":
       setNode("task", "done");
+      if (streamEl) { streamEl.remove(); streamEl = null; }  // 正式卡渲染,移除流式卡
       renderStep(payload); break;
     case "finalize_result":
       setNode("final", "done"); renderFinalize(payload.result); appendLog(ev); break;
@@ -312,7 +336,7 @@ function finishStream() {
   if (!streamEl) return;
   const head = streamEl.querySelector(".step-head");
   if (head) head.innerHTML = head.innerHTML.replace("生成中", "已生成");
-  streamEl = null;
+  // 保留 streamEl 引用: step_completed 渲染正式卡时移除
 }
 function markFeedback() {
   const e = $("loop-edge"); if (e) e.setAttribute("class", "edge feedback");
@@ -323,6 +347,8 @@ function resetView() {
   for (const n of NODES) setNode(n.id, "pending");
   $("loop-edge").setAttribute("class", "edge feedback");
   $("expert-edge").setAttribute("class", "edge");
+  const trunk = $("retreat-trunk");
+  if (trunk) trunk.setAttribute("class", "retreat");
   $("steps").innerHTML = ""; $("tool-detail").innerHTML = ""; $("events-log").innerHTML = "";
   stepBuf = {}; finalizeShown = false; streamEl = null;
 }
