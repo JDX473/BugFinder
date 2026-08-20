@@ -81,3 +81,28 @@ def build_demo_kb(embedder: Embedder) -> KnowledgeBase:
             ),
         ))
     return KnowledgeBase(examples, embedder)
+
+
+def build_im_kb(embedder: Embedder) -> KnowledgeBase:
+    """IM 初始知识库:从 QuantumLink IM 的真实故障模式提炼。
+
+    阶段 1 只有 Redis 故障案例;阶段 2(故障注入)后扩充 RocketMQ/
+    积压/连接类模式。答案即诊断知识,与标注集分离。
+    """
+    examples = [
+        KBExample(
+            text="""2026-08-19T00:06:03.599+08:00 ERROR --- c.q.im.chat.service.OutboxService: outbox scan error
+org.springframework.data.redis.RedisSystemException: Error in execution
+	at org.springframework.data.redis.connection.lettuce.LettuceExceptionConverter.convert""",
+            answer=("interpretation: OutboxService 定时扫描 Redis 发件箱失败,Redis 连接异常"
+                    "(Lettuce 无法执行命令),发件箱重推机制停摆\n"
+                    "evidence: outbox scan error; RedisSystemException"),
+        ),
+        KBExample(
+            text="""2026-08-19T00:07:25.139+08:00 ERROR --- c.q.im.chat.service.MessageService: async process error: conv=u_xxx#u_yyy""",
+            answer=("interpretation: 消息异步处理失败,与同一时段 Redis 故障相关"
+                    "(seq 递增/幂等/缓存依赖 Redis)\n"
+                    "evidence: async process error"),
+        ),
+    ]
+    return KnowledgeBase(examples, embedder)

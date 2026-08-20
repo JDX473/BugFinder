@@ -55,8 +55,27 @@ def make_demo_mock(job_id: str, finalize_result: dict):
 
 def run_one(cfg, job_id: str, *, force_mock: bool, decode_mode: str,
             out_dir: str | Path, sc_method: str | None, sc_samples: int | None,
-            variant: str | None = None) -> int:
-    meta = load_job(job_id)
+            variant: str | None = None, env_name: str = "demo") -> int:
+    if env_name == "im":
+        from .env.im_env import IMEnvironment, IM_JOBS_DIR
+        from .experts.knowledge import build_im_kb
+
+        env_cls = IMEnvironment
+        data_dir = IM_JOBS_DIR
+        kb_fn = build_im_kb
+        task_requirements = (Path(__file__).resolve().parent.parent
+                             / "config" / "prompts" / "task_requirements_im.txt").read_text(
+            encoding="utf-8")
+    else:
+        from .env.local import LocalEnvironment, DATA_DIR
+        from .experts.knowledge import build_demo_kb
+
+        env_cls = LocalEnvironment
+        data_dir = DATA_DIR
+        kb_fn = build_demo_kb
+        task_requirements = None  # 用默认模板
+
+    meta = load_job(job_id, data_dir)
 
     llm_cfg = cfg.llm
     if force_mock or llm_cfg.provider == "mock":
@@ -77,13 +96,13 @@ def run_one(cfg, job_id: str, *, force_mock: bool, decode_mode: str,
         llm = LLMClient(llm_cfg)
         mode = f"{llm_cfg.provider}:{llm_cfg.model}"
 
-    from .experts.knowledge import build_demo_kb
     from .llm.embedding import Embedder
 
     embedder = Embedder(cfg.embedding)
-    kb = build_demo_kb(embedder)
-    env = LocalEnvironment(llm=llm, embedder=embedder, kb=kb)
-    agent = RCAgent.build(cfg, llm, env, variant=variant)
+    kb = kb_fn(embedder)
+    env = env_cls(llm=llm, embedder=embedder, kb=kb)
+    agent = RCAgent.build(cfg, llm, env, variant=variant,
+                          task_requirements=task_requirements)
     job = JobDesc(
         job_id=meta["job_id"],
         anomaly=meta["anomaly"],
@@ -138,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--samples", type=int, default=None, help="SC sample count K")
     ap.add_argument("--variant", default=None,
                     help="agent variant: full|react|no_experts|no_jsonregen|no_obsk|no_obs_head")
+    ap.add_argument("--env", choices=["demo", "im"], default="demo",
+                    help="target service environment: demo(合成) | im(QuantumLink IM 真实服务)")
     ap.add_argument("--config", default=None)
     ap.add_argument("--list-jobs", action="store_true")
     args = ap.parse_args(argv)
@@ -154,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_one(cfg, args.job, force_mock=args.mock,
                    decode_mode=args.decode or "greedy", out_dir=cfg.trajectory.dir,
-                   sc_method=args.sc, sc_samples=args.samples, variant=args.variant)
+                   sc_method=args.sc, sc_samples=args.samples, variant=args.variant,
+                   env_name=args.env)
 
 
 if __name__ == "__main__":

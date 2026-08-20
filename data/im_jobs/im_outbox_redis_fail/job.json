@@ -1,0 +1,15 @@
+{
+ "job_id": "im_outbox_redis_fail",
+ "anomaly": "im-chat 服务持续报 'outbox scan error'(RedisSystemException)",
+ "detect_time": "2026-08-20T12:40:00+08:00",
+ "ground_truth": {
+  "root_cause": "本地 Redis 3.2.100 不支持 ZPOPMIN 命令(Redis 5.0 引入);OutboxService 每 5s 用 ZPOPMIN 扫描发件箱,命令被拒(RedisCommandExecutionException: ERR unknown command ZPOPMIN)导致 outbox scan error 持续",
+  "solution": "升级 Redis 到 >= 5.0(架构声明 7.x);或改造 OutboxService 用兼容方案(ZRANGEBYSCORE+ZREM 或 Lua 脚本)",
+  "evidence": "OutboxService: outbox scan error; Caused by: io.lettuce.core.RedisCommandExecutionException: ERR unknown command ZPOPMIN",
+  "responsibility": "platform"
+ },
+ "data_sources": {
+  "chat_log": "E:\\QIUZHAO\\IM\\tmp-chat.log",
+  "connect_log": "E:\\QIUZHAO\\IM\\tmp-connect-19001.log"
+ }
+}

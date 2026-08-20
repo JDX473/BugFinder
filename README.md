@@ -62,6 +62,25 @@ finalize 出口——所有反馈都回到 Controller Memory,循环不因错误�
 > 环境变量 `EMBEDDING_API_KEY`);API 批次上限 20 已处理。`--mock` 模式下仍用内置
 > 词袋 hash 便于离线测试。
 
+## 真实服务接入(QuantumLink IM)
+
+阶段 1 已把 RCAgent 接入真实目标服务——用户的 **QuantumLink IM**(Java/Netty/RocketMQ/Redis 高并发即时通讯系统):
+
+```bash
+# 真实代码 + 真实日志上的 RCA(DeepSeek;案例: OutboxService 的 outbox scan error)
+python -m rcagent --env im --job im_outbox_redis_fail
+```
+
+首次真实运行即发现真实根因(比人工标注更精确):本地 Redis 3.2.100 不支持
+`ZPOPMIN`(Redis 5.0 引入),OutboxService 每 5s 扫描发件箱失败
+——证据链来自真实日志堆栈 + code_agent 对 OutboxService 源码的分析。
+真实运行 7 步 PASSED、0 无效动作。
+
+IM 环境(`rcagent/env/im_env.py`)工具: chat_log / connect_log / error_summary
+/ outbox_error / log_agent / code_agent(仓库=E:\QIUZHAO\IM);
+领域知识模板 `config/prompts/task_requirements_im.txt`(服务专属件,
+框架零改动)。
+
 ## Web 可视化运行时(新入口)
 
 除了 CLI,项目带一个 **Web 在线运行时**:提交任务后实时观察 Agent 执行
