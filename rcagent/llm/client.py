@@ -76,6 +76,11 @@ class LLMClient:
         if self.provider == "mock" or self._force_mock:
             assert self.mock_script is not None
             text = self.mock_script(messages, dict(temperature=temperature))
+            if stream_cb is not None:
+                # 模拟流式: 按小块回调增量文本,让 mock 模式也有实时效果
+                # (真实模式走 OpenAI streaming,见下方 stream=True 分支)
+                for i in range(0, len(text), 4):
+                    stream_cb(text[i : i + 4])
             return Generation(text=text, model="mock")
 
         assert self._client is not None
