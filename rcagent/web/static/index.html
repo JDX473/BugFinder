@@ -37,16 +37,18 @@ main { display: grid; grid-template-columns: 320px 1fr 380px; gap: 12px; padding
 
 /* ---- Loop 节点图 ---- */
 #loop-svg { width: 100%; }
-.node rect { rx: 8; }
-.node text { fill: var(--text); font-size: 12px; text-anchor: middle; }
-.node .st { font-size: 10px; fill: var(--muted); }
-.edge { stroke: var(--gray); stroke-width: 1.5; fill: none; }
-.edge.feedback { stroke: var(--amber); stroke-dasharray: 5 3; }
-.edge-label { fill: var(--muted); font-size: 10px; }
-.node.pending rect { fill: #1e2632; stroke: var(--gray); }
-.node.active rect { fill: #12304f; stroke: var(--blue); stroke-width: 2; animation: pulse 1.2s infinite; }
-.node.success rect { fill: #0f2b22; stroke: var(--green); }
-.node.failed rect { fill: #31151a; stroke: var(--red); }
+.node rect { rx: 10; filter: url(#shadow); }
+.node text { fill: var(--text); font-size: 12px; font-weight: 600; }
+.node .icon { font-size: 20px; }
+.node .st { font-size: 10px; fill: var(--muted); font-weight: 400; }
+.edge { stroke: #4a5868; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+.edge.feedback { stroke: var(--amber); stroke-dasharray: 7 4; marker-end: url(#arrow-amber); }
+.edge-label { fill: var(--amber); font-size: 10px; font-weight: 600; }
+.node.pending rect { fill: #1b2330; stroke: #2f3b4c; }
+.node.active rect { fill: #12304f; stroke: var(--blue); stroke-width: 2.5; filter: url(#glow); animation: pulse 1.4s infinite; }
+.node.success rect { fill: #0e2a20; stroke: var(--green); }
+.node.failed rect { fill: #33161b; stroke: var(--red); }
+.node.success .icon { }
 @keyframes pulse { 50% { stroke-opacity: .35; } }
 
 /* ---- 步骤流 ---- */
@@ -86,6 +88,7 @@ select#history { width: 100%; margin-bottom: 8px; }
 <body>
 <header>
   <label>任务 <select id="job"></select></label>
+  <label>异常描述 <input type="text" id="anomaly" size="30" placeholder="自定义描述(选任务时留空用默认)"></label>
   <label><input type="checkbox" id="mock" checked> mock(无需 key)</label>
   <label>variant <select id="variant">
     <option value="full">full</option>
@@ -129,62 +132,74 @@ let es = null, curRun = null, stepBuf = {}, finalizeShown = false;
 
 /* ---------------- Loop 节点图 ---------------- */
 const NODES = [
-  { id: "task",      y: 20,  label: "任务输入" },
-  { id: "llm",       y: 95,  label: "LLM 生成", sub: "Thought + Function JSON" },
-  { id: "parse",     y: 170, label: "JsonRegen 解析", sub: "Algorithm 2" },
-  { id: "validate",  y: 245, label: "工具校验", sub: "参数合法性" },
-  { id: "errdetect", y: 320, label: "错误检测", sub: "§III-C2 三类错误" },
-  { id: "tool",      y: 400, label: "执行工具", sub: "信息收集 / 快照解析" },
-  { id: "expert",    y: 400, label: "专家分析", sub: "log/code agent", branch: true },
-  { id: "observe",   y: 480, label: "观察注入", sub: "head + [snapshot: key]" },
-  { id: "finalize",  y: 555, label: "finalize 出口", sub: "四项 RCA 结果" },
+  { id: "task",      y: 24,  icon: "📥", label: "任务输入", sub: "job_id / anomaly" },
+  { id: "llm",       y: 106, icon: "🧠", label: "LLM 生成", sub: "Thought + Function JSON" },
+  { id: "parse",     y: 188, icon: "🔧", label: "JsonRegen 解析", sub: "Algorithm 2" },
+  { id: "validate",  y: 270, icon: "✅", label: "工具校验", sub: "参数合法性" },
+  { id: "errdetect", y: 352, icon: "⚠️", label: "错误检测", sub: "§III-C2 三类错误" },
+  { id: "tool",      y: 434, icon: "⚙️", label: "执行工具", sub: "信息收集 / 快照解析" },
+  { id: "expert",    y: 434, icon: "🔬", label: "专家分析", sub: "log / code agent", branch: true },
+  { id: "observe",   y: 516, icon: "👁️", label: "观察注入", sub: "head + [snapshot: key]" },
+  { id: "finalize",  y: 598, icon: "🏁", label: "finalize 出口", sub: "四项 RCA 结果" },
 ];
+const NS = "http://www.w3.org/2000/svg";
+function el(name, attrs, parent) {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
 function buildSvg() {
   const svg = $("loop-svg");
   svg.innerHTML = "";
-  // 回环边(观察注入 → LLM 生成)
-  const loop = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  loop.setAttribute("class", "edge feedback");
-  loop.setAttribute("id", "loop-edge");
-  loop.setAttribute("d", "M90 480 C 250 540, 250 60, 150 95");
-  svg.appendChild(loop);
-  const lbl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-  lbl.setAttribute("class", "edge-label"); lbl.setAttribute("x", "218"); lbl.setAttribute("y", "300");
-  lbl.textContent = "观察 / 错误反馈"; svg.appendChild(lbl);
-  // 主节点
+  svg.setAttribute("viewBox", "0 0 320 690");
+  // defs: 箭头 / 阴影 / 发光
+  const defs = el("defs", {}, svg);
+  const marker = el("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "#4a5868" }, marker);
+  const markerA = el("marker", { id: "arrow-amber", viewBox: "0 0 10 10", refX: 9, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--amber)" }, markerA);
+  el("filter", { id: "shadow", x: "-20%", y: "-20%", width: "140%", height: "140%" }, defs)
+    .innerHTML = '<feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.45"/>';
+  el("filter", { id: "glow", x: "-40%", y: "-40%", width: "180%", height: "180%" }, defs)
+    .innerHTML = '<feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>';
+
+  // 主链节点
+  const X = 20, W = 210, H = 56, CX = X + W / 2;
   for (const n of NODES) {
-    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    g.setAttribute("class", "node pending"); g.setAttribute("id", "node-" + n.id);
-    const x = n.branch ? 150 : 60, w = n.branch ? 120 : 180;
-    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    r.setAttribute("x", x); r.setAttribute("y", n.y); r.setAttribute("width", w); r.setAttribute("height", 48);
-    g.appendChild(r);
-    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t.setAttribute("x", x + w / 2); t.setAttribute("y", n.y + 21); t.textContent = n.label;
-    g.appendChild(t);
-    if (n.sub) {
-      const st = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      st.setAttribute("class", "st"); st.setAttribute("x", x + w / 2); st.setAttribute("y", n.y + 37);
-      st.textContent = n.sub; g.appendChild(st);
-    }
-    svg.appendChild(g);
-    // 边(除分支节点与专家节点特殊处理)
-    if (!n.branch && n.id !== "task" && n.id !== "expert") {
-      const prev = NODES[NODES.indexOf(n) - 1];
-      if (prev && !prev.branch) {
-        const e = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        e.setAttribute("class", "edge");
-        e.setAttribute("x1", "150"); e.setAttribute("y1", prev.y + 48);
-        e.setAttribute("x2", "150"); e.setAttribute("y2", n.y);
-        svg.appendChild(e);
-      }
-    }
+    if (n.branch) continue;
+    const g = el("g", { class: "node pending", id: "node-" + n.id }, svg);
+    el("rect", { x: X, y: n.y, width: W, height: H }, g);
+    el("text", { class: "icon", x: X + 22, y: n.y + 38 }, g).textContent = n.icon;
+    el("text", { x: X + 44, y: n.y + 24 }, g).textContent = n.label;
+    const st = el("text", { class: "st", x: X + 44, y: n.y + 42 }, g);
+    st.textContent = n.sub;
   }
-  // 专家分支边
-  const be = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  be.setAttribute("class", "edge"); be.setAttribute("id", "expert-edge");
-  be.setAttribute("x1", "240"); be.setAttribute("y1", 424); be.setAttribute("x2", "270"); be.setAttribute("y2", 424);
-  svg.appendChild(be);
+  // 专家分支节点(右侧)
+  const exp = NODES.find(n => n.branch);
+  {
+    const g = el("g", { class: "node pending", id: "node-expert" }, svg);
+    el("rect", { x: 246, y: exp.y, width: 66, height: H }, g);
+    el("text", { class: "icon", x: 279, y: exp.y + 30 }, g).textContent = exp.icon;
+    el("text", { x: 279, y: exp.y + 48, "font-size": "10" }, g).textContent = exp.label;
+  }
+  // 主链连线(底部 → 下一个顶部)
+  for (let i = 0; i < NODES.length; i++) {
+    const n = NODES[i], next = NODES[i + 1];
+    if (n.branch || !next || next.branch) continue;
+    el("path", { class: "edge", d: `M${CX} ${n.y + H} L${CX} ${next.y}` }, svg);
+  }
+  // 专家分支连线(tool → expert)
+  el("path", { class: "edge", id: "expert-edge",
+    d: `M${X + W} ${exp.y + H / 2} L246 ${exp.y + H / 2}` }, svg);
+  // 回环: 观察注入 → LLM 生成(右侧绕行,虚线琥珀)
+  const obs = NODES.find(n => n.id === "observe"), llm = NODES.find(n => n.id === "llm");
+  el("path", { class: "edge feedback", id: "loop-edge",
+    d: `M${X + W} ${obs.y + H / 2} C 300 ${obs.y + H / 2}, 300 ${llm.y + H / 2}, ${X + W} ${llm.y + H / 2}` }, svg);
+  const lbl = el("text", { class: "edge-label", x: 246, y: 320 }, svg);
+  lbl.textContent = "观察 / 错误反馈";
 }
 function setNode(id, state) {
   const el = $("node-" + id);
@@ -236,6 +251,7 @@ function handleEvent(ev) {
     case "run_finished":
       setBadge(payload.status, payload.cost);
       if (payload.status !== "passed") setNode("finalize", "failed");
+      $("start").disabled = false; $("cancel").disabled = true;
       appendLog(ev); break;
   }
 }
@@ -307,8 +323,10 @@ function closeModal() { $("modal").style.display = "none"; }
 
 /* ---------------- 任务控制 ---------------- */
 async function startRun() {
+  const anomaly = $("anomaly").value.trim();
   const body = { job_id: $("job").value, variant: $("variant").value,
                  decode: "greedy", mock: $("mock").checked };
+  if (anomaly) body.anomaly = anomaly;
   const r = await fetch("/api/runs", { method: "POST", headers: {"Content-Type": "application/json"},
                                        body: JSON.stringify(body) });
   if (!r.ok) { alert((await r.json()).detail || "启动失败"); return; }

@@ -59,6 +59,21 @@ class TestRunManager:
         snap = mgr.get_run(run_id)
         assert snap["meta"]["status"] in ("cancelled", "passed")  # mock 可能已跑完
 
+    def test_custom_anomaly_override(self, tmp_path):
+        """自定义异常描述覆盖任务的默认描述(Web 入口输入)。"""
+        mgr = RunManager(CFG, runs_dir=tmp_path)
+        run_id = mgr.start("demo_es_conn_timeout", mock=True,
+                           anomaly="custom: job hanging on shutdown")
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            batch, done = mgr.events_since(run_id, -1)
+            if done:
+                break
+            time.sleep(0.05)
+        evs = mgr.get_run(run_id)["events"]
+        started = next(e for e in evs if e["type"] == "run_started")
+        assert "custom: job hanging" in started["payload"]["anomaly"]
+
     def test_events_persisted(self, tmp_path):
         mgr = RunManager(CFG, runs_dir=tmp_path)
         run_id = mgr.start("demo_es_conn_timeout", mock=True)

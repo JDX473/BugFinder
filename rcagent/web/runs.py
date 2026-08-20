@@ -38,6 +38,7 @@ class RunState:
     mock: bool
     variant: str
     decode: str
+    anomaly: str | None = None
     status: str = "running"
     events: list[dict] = field(default_factory=list)
     seq: int = 0
@@ -63,7 +64,8 @@ class RunManager:
     # -- 对外 API -----------------------------------------------------------
 
     def start(self, job_id: str, *, variant: str = "full",
-              decode: str = "greedy", mock: bool = True) -> str:
+              decode: str = "greedy", mock: bool = True,
+              anomaly: str | None = None) -> str:
         """启动一个 run;已有活跃 run 时抛 RunBusy。"""
         with self._active_lock:
             if self._active is not None:
@@ -71,6 +73,7 @@ class RunManager:
             state = RunState(
                 run_id=f"live_{job_id}_{int(time.time() * 1000)}",
                 job_id=job_id, mock=mock, variant=variant, decode=decode,
+                anomaly=anomaly,
             )
             self._active = state
         t = threading.Thread(target=self._worker, args=(state,), daemon=True)
@@ -208,8 +211,11 @@ class RunManager:
         from ..llm.embedding import Embedder
 
         meta = load_job(state.job_id)
-        job = JobDesc(job_id=meta["job_id"], anomaly=meta["anomaly"],
-                      detect_time=meta["detect_time"])
+        job = JobDesc(
+            job_id=meta["job_id"],
+            anomaly=(state.anomaly or meta["anomaly"]).strip() or meta["anomaly"],
+            detect_time=meta["detect_time"],
+        )
 
         if state.mock:
             from ..llm.client import LLMClient
@@ -266,6 +272,9 @@ class RunManager:
         }
 
     def _find_archive_base(self, run_id: str) -> Path | None:
+        """按 run_id 找轨迹 JSON;排除 .events.json 事件文件(防御误匹配)。"""
+        if run_id.endswith(".events"):
+            return None
         p = self.runs_dir / f"{run_id}.json"
         return p if p.exists() else None
 
