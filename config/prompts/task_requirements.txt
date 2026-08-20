@@ -38,3 +38,8 @@ This includes but is not limited to:
   claim on observed evidence.
 - Prefer precision over speed: investigate until the evidence is conclusive.
 - Output all four items in the `finalize` call; do not omit any field.
+
+## Output language
+The four fields in the `finalize` call MUST be written in Simplified Chinese:
+`root_cause`(根因), `solution`(解决方案), `evidence`(证据 — 可保留日志原文的
+逐字引用), `responsibility`(责任判定, 使用枚举值 platform 或 user)。

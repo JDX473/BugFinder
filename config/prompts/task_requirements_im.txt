@@ -51,6 +51,11 @@ four items: root_cause, solution, evidence, responsibility.
   (frame format constants, handshake flows) is unnecessary.
 - Output all four items in the `finalize` call; do not omit any field.
 
+## Output language
+The four fields in the `finalize` call MUST be written in Simplified Chinese:
+`root_cause`(根因), `solution`(解决方案), `evidence`(证据 — 可保留日志原文的
+逐字引用), `responsibility`(责任判定, 使用枚举值 platform 或 user)。
+
 ## Responsibility determination rules
 Platform responsibility (fixed by the platform maintainer):
 1. Middleware/infrastructure failures: Redis, RocketMQ, MySQL, Nacos
